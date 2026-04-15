@@ -1,5 +1,6 @@
 import io
 import logging
+import uuid
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -55,8 +56,7 @@ async def upload_photo(
     contents = await file.read()
     _, new_ext = _compress_image(contents)
 
-    base_name = file.filename.rsplit(".", 1)[0]
-    new_filename = base_name + new_ext
+    new_filename = uuid.uuid4().hex + new_ext
     logger.info("사진 압축 완료 - 저장 파일명=%s", new_filename)
 
     # TODO: S3 연동 시 압축된 bytes(_) 사용
