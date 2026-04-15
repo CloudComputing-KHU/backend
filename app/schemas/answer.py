@@ -13,7 +13,6 @@ class AnswerRequest(BaseModel):
     answer: Optional[str] = None
 
 class AnswerResponse(BaseModel):
-    success: bool
     message: str
 
 class AnswerItem(BaseModel):

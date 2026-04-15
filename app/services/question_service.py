@@ -42,7 +42,7 @@ class QuestionService:
         return questions[0] if questions else None
 
     @staticmethod
-    def save_answer(q_type: QuestionType, request: AnswerRequest) -> bool:
+    def save_answer(q_type: QuestionType, request: AnswerRequest) -> None:
         # TODO: DynamoDB 연동
         mock_answers.append({
             "type": q_type,
@@ -54,7 +54,6 @@ class QuestionService:
             "voice_file_key": None,
             "created_at": datetime.now()
         })
-        return True
 
     @staticmethod
     def save_voice_answer_metadata(q_type: QuestionType, user_id: str, question_id: str, file_path: str) -> dict:

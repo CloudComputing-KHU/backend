@@ -1,4 +1,5 @@
 import io
+import logging
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -7,6 +8,7 @@ from app.schemas.photo import PhotoResponse
 from app.services.photo_service import photo_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_DIMENSION = 1280
 JPEG_QUALITY = 85
@@ -43,8 +45,11 @@ async def upload_photo(
     scheduled_at: Optional[datetime] = Form(None),
     file: UploadFile = File(...)
 ):
+    logger.info("사진 업로드 - sender=%s, receiver=%s, filename=%s", sender_user_id, receiver_user_id, file.filename)
+
     valid_ext = (".jpg", ".jpeg", ".png")
     if not file.filename.lower().endswith(valid_ext):
+        logger.warning("유효하지 않은 파일 확장자 - filename=%s", file.filename)
         raise HTTPException(status_code=400, detail="Invalid extension")
 
     contents = await file.read()
@@ -52,6 +57,7 @@ async def upload_photo(
 
     base_name = file.filename.rsplit(".", 1)[0]
     new_filename = base_name + new_ext
+    logger.info("사진 압축 완료 - 저장 파일명=%s", new_filename)
 
     # TODO: S3 연동 시 압축된 bytes(_) 사용
     mock_s3_url = f"s3://my-virtual-bucket/photos/{sender_user_id}/{new_filename}"
@@ -66,4 +72,5 @@ async def upload_photo(
 
 @router.get("/history", response_model=List[PhotoResponse])
 def get_photo_history(user_id: str):
+    logger.info("사진 내역 조회 - user_id=%s", user_id)
     return photo_service.get_photo_history(user_id)
