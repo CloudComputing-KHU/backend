@@ -18,3 +18,7 @@ app.include_router(photos.router, prefix="/photos", tags=["Photos"])
 @app.get("/", tags=["Health Check"])
 def root():
     return {"status": "ok", "message": "Server is running!"}
+
+@app.get("/health", tags=["Health Check"])
+def health():
+    return {"status": "ok"}
