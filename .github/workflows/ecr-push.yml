@@ -32,7 +32,7 @@ jobs:
         run: |
           IMAGE_URI=501222039467.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
 
-          docker build -t $IMAGE_URI ./backend/test
+          docker build -t $IMAGE_URI ./test
           docker push $IMAGE_URI
 
           echo "Pushed image: $IMAGE_URI"
