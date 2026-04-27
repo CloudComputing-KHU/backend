@@ -1,7 +1,10 @@
+import time
+
 def main():
     print("ITDA AI Worker started")
-    print("This worker will process S3 audio, Transcribe, and Bedrock later.")
-
+    while True:
+        print("AI Worker is running...")
+        time.sleep(60)
 
 if __name__ == "__main__":
     main()
