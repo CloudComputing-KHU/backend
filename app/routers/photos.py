@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from PIL import Image, ImageOps
 from app.schemas.photo import PhotoResponse
 from app.services.photo_service import photo_service
+from app.services.storage_service import storage_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -53,19 +54,24 @@ async def upload_photo(
         logger.warning("유효하지 않은 파일 확장자 - filename=%s", file.filename)
         raise HTTPException(status_code=400, detail="Invalid extension")
 
-    contents = await file.read()
-    _, new_ext = _compress_image(contents)
+    original_contents = await file.read()
+    compressed_contents, new_ext = _compress_image(original_contents)
 
     new_filename = uuid.uuid4().hex + new_ext
     logger.info("사진 압축 완료 - 저장 파일명=%s", new_filename)
 
-    # TODO: S3 연동 시 압축된 bytes(_) 사용
-    mock_s3_url = f"s3://my-virtual-bucket/photos/{sender_user_id}/{new_filename}"
+    content_type = "image/png" if new_ext == ".png" else "image/jpeg"
+    s3_path = storage_service.upload_photo(
+        user_id=sender_user_id,
+        stored_filename=new_filename,
+        contents=compressed_contents,
+        content_type=content_type,
+    )
 
     return photo_service.save_photo(
         sender_user_id=sender_user_id,
         receiver_user_id=receiver_user_id,
-        file_path=mock_s3_url,
+        file_path=s3_path,
         caption=caption,
         scheduled_at=scheduled_at
     )

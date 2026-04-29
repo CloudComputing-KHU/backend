@@ -1,0 +1,42 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "FastAPI backend prototype for parent-child check-in service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.39,<2.0",
+    "fastapi>=0.115,<1.0",
+    "pillow>=11.0,<12.0",
+    "pydantic>=2.0,<3.0",
+    "python-dotenv>=1.1,<2.0",
+    "python-multipart>=0.0.20,<1.0",
+    "uvicorn[standard]>=0.35,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1.0",
+    "poethepoet>=0.34,<1.0",
+    "pytest>=8.0,<9.0",
+]
+
+[tool.poe.tasks.serve]
+cmd = "uvicorn app.main:app --reload"
+help = "Run the FastAPI app with auto reload"
+
+[tool.poe.tasks.test]
+cmd = "pytest"
+help = "Run the full test suite"
+
+[tool.poe.tasks.test-voice]
+cmd = "pytest test/test_answers_router.py"
+help = "Run voice upload tests only"
+
+[tool.poe.tasks.check-voice]
+cmd = "python -m scripts.check_voice_upload"
+help = "Run a local voice upload smoke check"
+
+[tool.poe.tasks.benchmark-photo]
+cmd = "python scripts/benchmark_photo.py"
+help = "Run the photo compression benchmark"

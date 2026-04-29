@@ -13,6 +13,7 @@ from app.schemas.answer import (
 )
 from app.services.question_service import question_service
 from app.services.ai_service import ai_service
+from app.services.storage_service import storage_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -79,13 +80,18 @@ async def submit_voice_answer(
     contents = await file.read()
     stored_filename, file_size, content_type = _prepare_audio_upload(file, contents)
 
-    mock_s3_url = f"s3://my-virtual-bucket/voices/{user_id}/{stored_filename}"
+    s3_path = storage_service.upload_voice(
+        user_id=user_id,
+        stored_filename=stored_filename,
+        contents=contents,
+        content_type=content_type,
+    )
 
     answer_record = question_service.save_voice_answer_metadata(
         q_type=type,
         user_id=user_id,
         question_id=question_id,
-        file_path=mock_s3_url,
+        file_path=s3_path,
         original_filename=file.filename,
         stored_filename=stored_filename,
         content_type=content_type,

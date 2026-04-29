@@ -1,13 +1,12 @@
+/.venv/
+/.uv-cache/
 venv/
 __pycache__/
 *.pyc
 .env
 .idea/
 .vscode/
+.DS_Store
 
 
 resource
-
-
-docs/
-AGENTS.md
