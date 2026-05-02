@@ -6,15 +6,22 @@ app/
   ├── routers/                # API의 URL 경로와 요청/응답을 처리 역할
   │   ├── questions.py        # 질문 데이터 제공 관련 API
   │   ├── answers.py          # 답변 데이터 저장/조회 관련 API
-  │   └── photos.py           # 사진 전송 및 조회 관련 API
+  │   ├── photos.py           # 사진 전송 및 조회 관련 API
+  │   └── dementia.py         # 치매 위험 감지 분석 API
   ├── schemas/                # 클라이언트와 주고받을 데이터 스키마 정의 (데이터 검증 역할)
   │   ├── question.py         # 질문 데이터 형식
   │   ├── answer.py           # 답변 데이터 형식
-  │   └── photo.py            # 사진 데이터 형식
+  │   ├── photo.py            # 사진 데이터 형식
+  │   └── dementia.py         # 치매 분석 요청/결과 데이터 형식
   └── services/               # 실제 비즈니스 로직(DB 저장, 필터링, 정렬 등)을 수행
       ├── question_service.py # 질문/답변 in-memory DB 로직
       ├── photo_service.py    # 사진 업로드 및 조회 in-memory DB 로직
-      └── ai_service.py       # (추후 확장용) 백그라운드 AI 분석 등 비동기 파이프라인 전담
+      ├── ai_service.py       # (추후 확장용) 백그라운드 AI 분석 등 비동기 파이프라인 전담
+      └── dementia_service.py # 치매 위험 감지 파이프라인 (S3→Transcribe→Lambda/OpenAI)
+lambda/
+  └── dementia_analyzer/
+      ├── handler.py          # Lambda 함수 (OpenAI GPT 치매 분석)
+      └── requirements.txt    # Lambda 의존성 (openai)
 scripts/
   └── check_voice_upload.py   # 음성 업로드 스모크 체크 스크립트
 test/
@@ -63,6 +70,54 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 ### 6. 사진 일상 전송 내역 조회
 - **GET** `/photos/history?user_id={user_id}`
 - **설명**: 특정 사용자(보낸 사람 기준)가 전송한 사진 목록과 그 상태를 최신 시간순으로 파악합니다.
+
+### 7. 치매 위험 분석 요청
+- **POST** `/dementia/analyze`
+- **설명**: 이미 업로드된 음성 답변에 대해 치매 위험 분석을 요청합니다.
+- **요청 Body**: `user_id`(부모 식별자), `answer_id`(음성 답변 ID)
+- **동작 방식**:
+  1. S3에 저장된 음성 파일을 AWS Transcribe로 전달하여 텍스트로 변환합니다.
+  2. 변환된 텍스트를 Lambda + API Gateway (OpenAI GPT)에 전달하여 치매 위험 지표를 분석합니다.
+  3. 분석은 백그라운드에서 비동기로 수행되며, 요청 즉시 `analysis_id`가 반환됩니다.
+- **분석 기준**: 단어 찾기 어려움, 반복 발화, 문장 구조 단순화, 시간/장소 혼동, 주제 이탈, 기억 관련 표현, 발화 유창성
+- **응답 예시**:
+  ```json
+  {
+    "message": "치매 위험 분석이 요청되었습니다.",
+    "analysis_id": "analysis_abc12345",
+    "answer_id": "answer_9f8e7d6c",
+    "user_id": "parent_001",
+    "status": "pending",
+    "created_at": "2026-04-30T14:00:00"
+  }
+  ```
+
+### 8. 치매 분석 결과 조회
+- **GET** `/dementia/{analysis_id}`
+- **설명**: 특정 분석 건의 상세 결과를 조회합니다.
+- **파라미터**: `analysis_id` 경로 파라미터
+- **특징**: 분석 진행 중이면 현재 `status`를, 완료 시 `risk_level`, `risk_score`, `analysis_summary`, `indicators`를 포함한 전체 결과를 반환합니다.
+- **응답 예시** (완료 시):
+  ```json
+  {
+    "analysis_id": "analysis_abc12345",
+    "answer_id": "answer_9f8e7d6c",
+    "user_id": "parent_001",
+    "status": "completed",
+    "transcript": "오늘 약은... 그거... 먹었는데... 뭐였더라...",
+    "risk_level": "medium",
+    "risk_score": 0.6,
+    "analysis_summary": "대명사 과다 사용과 단어 찾기 어려움이 관찰됩니다.",
+    "indicators": ["단어 찾기 어려움", "기억 관련 표현"],
+    "created_at": "2026-04-30T14:00:00",
+    "completed_at": "2026-04-30T14:03:00"
+  }
+  ```
+
+### 9. 사용자별 치매 분석 이력 조회
+- **GET** `/dementia?user_id={user_id}`
+- **설명**: 특정 부모의 치매 분석 이력을 최신순으로 조회합니다.
+- **파라미터**: `user_id` Query 파라미터
 
 ---
 

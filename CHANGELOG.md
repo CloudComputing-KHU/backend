@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## 2026-05-02
+
+### Author
+- `jrne2` 
+
+### Changes
+- Added dementia risk detection feature: full pipeline from voice analysis request to result retrieval.
+- Created `app/schemas/dementia.py` — Pydantic schemas for analysis request/response/result/history.
+- Created `app/routers/dementia.py` — 3 API endpoints: `POST /dementia/analyze`, `GET /dementia/{analysis_id}`, `GET /dementia?user_id=...`.
+- Created `app/services/dementia_service.py` — Pipeline service: S3 URI parsing → Transcribe STT → Lambda(OpenAI) analysis, background async execution.
+- Created `lambda/dementia_analyzer/handler.py` — AWS Lambda function that calls OpenAI GPT for dementia risk analysis with 7 clinical indicators.
+- Created `lambda/dementia_analyzer/requirements.txt` — Lambda dependency (openai).
+- Registered dementia router in `app/main.py` under `/dementia` prefix.
+- Updated `.env.example`: removed `BEDROCK_MODEL_ID`, added `LLM_API_GATEWAY_URL` for API Gateway endpoint.
+- Updated `README.md`: added lambda directory to project structure, updated dementia analysis description to reflect Lambda + API Gateway + OpenAI architecture.
+- Created `scripts/test_lambda_integration.py` — Integration test script (S3/Transcribe mocked, Lambda/OpenAI real).
+- Created `scripts/check_dementia.py` — Smoke test script for dementia API endpoints.
+- Built Lambda deployment package with Linux-compatible binaries (`--platform manylinux2014_x86_64`).
+
+### Architecture
+- Initially implemented with Amazon Bedrock (Claude), then migrated to Lambda + API Gateway + OpenAI GPT due to Learner Lab restrictions on Bedrock access.
+- OpenAI API key is stored only in Lambda environment variables — not exposed to the backend server.
+
+### Verified
+- API Gateway + Lambda + OpenAI GPT integration: dementia analysis returns `risk_level`, `risk_score`, `analysis_summary`, `indicators`.
+- FastAPI pipeline (mock STT + real Lambda): `pending → transcribing → transcribed → analyzing → completed` status flow confirmed.
+- Non-voice answer rejection returns 400 as expected.
+- All integration tests passed (`scripts/test_lambda_integration.py`).
+
+### Follow-up
+- Connect S3 + Transcribe for real voice-to-text E2E pipeline.
+- Add DynamoDB-backed persistence for analysis records (`mock_analyses` → DB).
+- Optional: auto-trigger dementia analysis on voice upload (currently requires manual `/dementia/analyze` call).
+
+---
+
 ## 2026-04-29
 
 ### Author

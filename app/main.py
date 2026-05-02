@@ -2,7 +2,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.routers import answers, photos, questions
+from app.routers import answers, dementia, photos, questions
 
 
 logging.basicConfig(
@@ -16,6 +16,7 @@ app = FastAPI(version="1.0.0")
 app.include_router(questions.router, prefix="/questions", tags=["Questions"])
 app.include_router(answers.router, prefix="/answers", tags=["Answers"])
 app.include_router(photos.router, prefix="/photos", tags=["Photos"])
+app.include_router(dementia.router, prefix="/dementia", tags=["Dementia"])
 
 
 @app.get("/", tags=["Health Check"])
