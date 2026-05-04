@@ -26,6 +26,7 @@
 | DB 연동 (DynamoDB) | 미완료 — 현재 in-memory |
 | 수신 사진 조회 API | 완료 |
 | 예약 사진 전송 스케줄러 | 완료 |
+| Presigned URL (음성/사진 접근) | 완료 |
 | STT 파이프라인 (Transcribe) | 코드 완성 — Lambda 배포 필요 |
 
 ---
@@ -84,7 +85,7 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **GET** `/answers/{type}?user_id={user_id}`
 - **설명**: 자녀가 부모님의 상태를 확인할 수 있도록, 특정 부모가 남긴 답변들을 최신 시간순으로 정렬하여 보여줍니다.
 - **파라미터**: `type` 경로 파라미터 / `user_id` Query 파라미터
-- **특징**: 일반 텍스트는 물론, 등록된 음성 답변의 상태(`voice_status`)도 함께 가져와 표시할 수 있게 설계되었습니다.
+- **특징**: 음성 답변의 경우 `voice_status`와 함께 바로 재생 가능한 `voice_url` (Presigned URL, 7일 유효)도 함께 반환합니다.
 
 ### 4. 음성 답변 업로드
 - **POST** `/answers/{type}/voice`
@@ -93,22 +94,25 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **요청 Form**: `user_id`, `question_id`, `file` (Multipart/form-data)
 - **특징**:
   - 파일 수신 시 확장자, MIME 타입, 빈 파일 여부, 최대 크기(10MB)를 검증합니다.
-  - 업로드 성공 시 `answer_id`, 저장 파일명, 원본 파일명, 파일 크기, `voice_status`를 함께 반환합니다.
+  - 업로드 성공 시 `answer_id`, 저장 파일명, 원본 파일명, 파일 크기, `voice_status`, `voice_url`을 함께 반환합니다.
+  - `voice_url`은 7일간 유효한 Presigned URL로, 프론트엔드에서 바로 재생 가능합니다.
   - 파일 수신 즉시 `uploaded` 상태로 전환됩니다. STT 분석은 `/dementia/analyze` API를 통해 별도로 요청합니다.
 
 ### 5. 사진 전송 (즉시/예약)
 - **POST** `/photos`
 - **설명**: 서로의 일상 사진을 전송하거나 특정 시간에 전송되도록 예약합니다.
 - **파라미터**: `file`, `sender_user_id`, `receiver_user_id`, `caption`, `scheduled_at` (Multipart/form-data)
-- **특징**: `scheduled_at` 파라미터가 제공될 경우 `scheduled` 상태로 저장되며, 서버 내 asyncio 스케줄러가 해당 시간에 자동 발송 처리합니다.
+- **특징**:
+  - `scheduled_at` 파라미터가 제공될 경우 `scheduled` 상태로 저장되며, 서버 내 asyncio 스케줄러가 해당 시간에 자동 발송 처리합니다.
+  - 응답에 바로 열람 가능한 `presigned_url` (Presigned URL, 7일 유효)이 포함됩니다.
 
 ### 6. 사진 전송 내역 조회 (발신자 기준)
 - **GET** `/photos/history?user_id={user_id}`
-- **설명**: 특정 사용자가 전송한 사진 목록을 최신순으로 조회합니다.
+- **설명**: 특정 사용자가 전송한 사진 목록을 최신순으로 조회합니다. 각 항목에 `presigned_url`이 포함됩니다.
 
 ### 7. 수신 사진 조회 (수신자 기준)
 - **GET** `/photos/received?user_id={user_id}`
-- **설명**: 특정 사용자가 받은 사진 목록을 최신순으로 조회합니다. `status=sent`인 사진만 반환합니다.
+- **설명**: 특정 사용자가 받은 사진 목록을 최신순으로 조회합니다. `status=sent`인 사진만 반환하며, 각 항목에 `presigned_url`이 포함됩니다.
 
 ### 8. 치매 위험 분석 요청
 - **POST** `/dementia/analyze`

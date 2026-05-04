@@ -9,6 +9,7 @@ class PhotoResponse(BaseModel):
     sender_user_id: str
     receiver_user_id: str
     image_url: str
+    presigned_url: Optional[str] = None
     caption: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     status: PhotoStatus

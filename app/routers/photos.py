@@ -81,15 +81,17 @@ async def upload_photo(
         asyncio.create_task(photo_service.schedule_dispatch(photo_record))
         logger.info("예약 사진 등록 - photo_id=%s, scheduled_at=%s", photo_record["photo_id"], scheduled_at)
 
-    return photo_record
+    return {**photo_record, "presigned_url": storage_service.generate_presigned_url(s3_path)}
 
 @router.get("/history", response_model=List[PhotoResponse])
 def get_photo_history(user_id: str):
     logger.info("사진 내역 조회 - user_id=%s", user_id)
-    return photo_service.get_photo_history(user_id)
+    photos = photo_service.get_photo_history(user_id)
+    return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]
 
 
 @router.get("/received", response_model=List[PhotoResponse])
 def get_received_photos(user_id: str):
     logger.info("수신 사진 조회 - user_id=%s", user_id)
-    return photo_service.get_received_photos(user_id)
+    photos = photo_service.get_received_photos(user_id)
+    return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]

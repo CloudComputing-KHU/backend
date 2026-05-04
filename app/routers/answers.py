@@ -58,7 +58,11 @@ def _prepare_audio_upload(file: UploadFile, contents: bytes) -> tuple[str, int, 
 @router.get("/{type}", response_model=List[AnswerItem])
 def get_user_answers(type: QuestionType, user_id: str):
     logger.info("답변 목록 조회 - type=%s, user_id=%s", type, user_id)
-    return question_service.get_user_answers(type, user_id)
+    answers = question_service.get_user_answers(type, user_id)
+    for ans in answers:
+        if ans.get("voice_file_key"):
+            ans["voice_url"] = storage_service.generate_presigned_url(ans["voice_file_key"])
+    return answers
 
 @router.post("/{type}", response_model=AnswerResponse)
 def submit_answer(type: QuestionType, request: AnswerRequest):
@@ -103,6 +107,7 @@ async def submit_voice_answer(
         answer_id=answer_record["answer_id"],
         voice_status=answer_record["voice_status"],
         voice_file_key=answer_record["voice_file_key"],
+        voice_url=storage_service.generate_presigned_url(answer_record["voice_file_key"]),
         original_filename=answer_record["original_filename"],
         stored_filename=answer_record["stored_filename"],
         content_type=answer_record["content_type"],

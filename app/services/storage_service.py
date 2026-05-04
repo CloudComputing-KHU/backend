@@ -144,4 +144,21 @@ class StorageService:
             raise HTTPException(status_code=502, detail="S3 upload failed") from exc
 
 
+    def generate_presigned_url(self, s3_uri: str, expiration: int = 604800) -> str | None:
+        """s3:// URI를 Presigned URL로 변환한다. 최대 유효기간 7일."""
+        if not s3_uri or not s3_uri.startswith("s3://"):
+            return None
+        without_scheme = s3_uri[5:]
+        bucket, _, key = without_scheme.partition("/")
+        try:
+            return self._client_for().generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": key},
+                ExpiresIn=expiration,
+            )
+        except (NoCredentialsError, PartialCredentialsError, ClientError, BotoCoreError) as exc:
+            logger.exception("Presigned URL 생성 실패 - s3_uri=%s", s3_uri)
+            raise HTTPException(status_code=502, detail=f"Failed to generate presigned URL: {exc}") from exc
+
+
 storage_service = StorageService()

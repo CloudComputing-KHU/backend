@@ -23,6 +23,7 @@ class VoiceUploadResponse(BaseModel):
     answer_id: str
     voice_status: VoiceStatus
     voice_file_key: str
+    voice_url: Optional[str] = None
     original_filename: str
     stored_filename: str
     content_type: Optional[str] = None
@@ -39,6 +40,7 @@ class AnswerItem(BaseModel):
     answer: Optional[str]
     voice_status: Optional[VoiceStatus] = None
     voice_file_key: Optional[str] = None
+    voice_url: Optional[str] = None
     original_filename: Optional[str] = None
     stored_filename: Optional[str] = None
     content_type: Optional[str] = None
