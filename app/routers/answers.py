@@ -3,7 +3,7 @@ import os
 import uuid
 from typing import List
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from app.schemas.question import QuestionType
 from app.schemas.answer import (
     AnswerItem,
@@ -12,7 +12,6 @@ from app.schemas.answer import (
     VoiceUploadResponse,
 )
 from app.services.question_service import question_service
-from app.services.ai_service import ai_service
 from app.services.storage_service import storage_service
 
 router = APIRouter()
@@ -70,7 +69,6 @@ def submit_answer(type: QuestionType, request: AnswerRequest):
 @router.post("/{type}/voice", response_model=VoiceUploadResponse)
 async def submit_voice_answer(
     type: QuestionType,
-    background_tasks: BackgroundTasks,
     user_id: str = Form(...),
     question_id: str = Form(...),
     file: UploadFile = File(...)
@@ -98,8 +96,7 @@ async def submit_voice_answer(
         file_size=file_size,
     )
 
-    background_tasks.add_task(ai_service.mock_ai_analysis_task, answer_record)
-    logger.info("음성 답변 저장 완료, AI 분석 백그라운드 시작 - user_id=%s", user_id)
+    logger.info("음성 답변 저장 완료 - user_id=%s", user_id)
 
     return VoiceUploadResponse(
         message="Voice uploaded",

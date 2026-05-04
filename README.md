@@ -1,3 +1,35 @@
+# 부모-자녀 안부 확인 서비스 — 백엔드
+
+부모님의 일상(건강, 식사, 기분)을 확인하고 사진을 주고받는 앱의 백엔드 서버입니다.
+
+## 기술 스택
+
+- **Runtime**: Python 3.12 / FastAPI / uvicorn
+- **Storage**: AWS S3 (음성, 사진 파일)
+- **AI 분석**: AWS Transcribe (STT) → AWS Lambda + OpenAI GPT (치매 위험 감지)
+- **패키징**: uv + pyproject.toml
+
+## 아키텍처 흐름
+
+```
+음성 업로드 → S3 저장 → AWS Transcribe (STT) → Lambda → OpenAI GPT → 치매 위험 분석 결과
+```
+
+## 현재 구현 상태
+
+| 항목 | 상태 |
+|------|------|
+| 질문/답변/사진 API | 완료 |
+| S3 파일 업로드 (음성, 사진) | 완료 |
+| 사진 압축/리사이즈 | 완료 |
+| 치매 위험 분석 API + Lambda | 완료 |
+| DB 연동 (DynamoDB) | 미완료 — 현재 in-memory |
+| 수신 사진 조회 API | 완료 |
+| 예약 사진 전송 스케줄러 | 완료 |
+| STT 파이프라인 (Transcribe) | 코드 완성 — Lambda 배포 필요 |
+
+---
+
 ## 프로젝트 구조
 
 ```text
@@ -16,14 +48,17 @@ app/
   └── services/               # 실제 비즈니스 로직(DB 저장, 필터링, 정렬 등)을 수행
       ├── question_service.py # 질문/답변 in-memory DB 로직
       ├── photo_service.py    # 사진 업로드 및 조회 in-memory DB 로직
-      ├── ai_service.py       # (추후 확장용) 백그라운드 AI 분석 등 비동기 파이프라인 전담
-      └── dementia_service.py # 치매 위험 감지 파이프라인 (S3→Transcribe→Lambda/OpenAI)
+      ├── dementia_service.py # 치매 위험 감지 파이프라인 (S3→Transcribe→Lambda/OpenAI)
+      └── storage_service.py  # S3 파일 업로드 로직 (음성, 사진)
 lambda/
   └── dementia_analyzer/
       ├── handler.py          # Lambda 함수 (OpenAI GPT 치매 분석)
       └── requirements.txt    # Lambda 의존성 (openai)
 scripts/
-  └── check_voice_upload.py   # 음성 업로드 스모크 체크 스크립트
+  ├── check_voice_upload.py        # 음성 업로드 스모크 체크
+  ├── check_dementia.py            # 치매 분석 요청 스모크 체크
+  ├── test_lambda_integration.py   # Lambda 연동 테스트
+  └── benchmark_photo.py           # 사진 압축 벤치마크
 test/
   └── test_answers_router.py  # 음성 업로드 API 테스트
 pyproject.toml                # uv / poe / dependency 설정
@@ -59,19 +94,23 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **특징**:
   - 파일 수신 시 확장자, MIME 타입, 빈 파일 여부, 최대 크기(10MB)를 검증합니다.
   - 업로드 성공 시 `answer_id`, 저장 파일명, 원본 파일명, 파일 크기, `voice_status`를 함께 반환합니다.
-  - 파일 수신 즉시 `uploaded` 상태로 전환되며, 백그라운드 파이프라인(STT) 처리가 완료되면 `analyzed` 상태로 업데이트됩니다.
+  - 파일 수신 즉시 `uploaded` 상태로 전환됩니다. STT 분석은 `/dementia/analyze` API를 통해 별도로 요청합니다.
 
 ### 5. 사진 전송 (즉시/예약)
 - **POST** `/photos`
 - **설명**: 서로의 일상 사진을 전송하거나 특정 시간에 전송되도록 예약합니다.
 - **파라미터**: `file`, `sender_user_id`, `receiver_user_id`, `caption`, `scheduled_at` (Multipart/form-data)
-- **특징**: `scheduled_at` 파라미터가 제공될 경우 `scheduled` 상태로 저장되어 추후 스케줄러에 의해 발송됩니다.
+- **특징**: `scheduled_at` 파라미터가 제공될 경우 `scheduled` 상태로 저장되며, 서버 내 asyncio 스케줄러가 해당 시간에 자동 발송 처리합니다.
 
-### 6. 사진 일상 전송 내역 조회
+### 6. 사진 전송 내역 조회 (발신자 기준)
 - **GET** `/photos/history?user_id={user_id}`
-- **설명**: 특정 사용자(보낸 사람 기준)가 전송한 사진 목록과 그 상태를 최신 시간순으로 파악합니다.
+- **설명**: 특정 사용자가 전송한 사진 목록을 최신순으로 조회합니다.
 
-### 7. 치매 위험 분석 요청
+### 7. 수신 사진 조회 (수신자 기준)
+- **GET** `/photos/received?user_id={user_id}`
+- **설명**: 특정 사용자가 받은 사진 목록을 최신순으로 조회합니다. `status=sent`인 사진만 반환합니다.
+
+### 8. 치매 위험 분석 요청
 - **POST** `/dementia/analyze`
 - **설명**: 이미 업로드된 음성 답변에 대해 치매 위험 분석을 요청합니다.
 - **요청 Body**: `user_id`(부모 식별자), `answer_id`(음성 답변 ID)
@@ -92,7 +131,7 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
   }
   ```
 
-### 8. 치매 분석 결과 조회
+### 9. 치매 분석 결과 조회
 - **GET** `/dementia/{analysis_id}`
 - **설명**: 특정 분석 건의 상세 결과를 조회합니다.
 - **파라미터**: `analysis_id` 경로 파라미터
@@ -114,7 +153,7 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
   }
   ```
 
-### 9. 사용자별 치매 분석 이력 조회
+### 10. 사용자별 치매 분석 이력 조회
 - **GET** `/dementia?user_id={user_id}`
 - **설명**: 특정 부모의 치매 분석 이력을 최신순으로 조회합니다.
 - **파라미터**: `user_id` Query 파라미터
@@ -334,7 +373,7 @@ aws s3api head-object \
 
 ### 바로 주면 되는 값
 
-아래 값들을 주면 내가 음성/사진 업로드를 실제 S3 저장 방식으로 연결할 수 있습니다.
+아래 환경 변수를 `.env`에 설정하면 음성/사진 업로드가 실제 S3에 저장됩니다.
 
 ```env
 AWS_ACCESS_KEY_ID=...

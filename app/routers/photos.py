@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import uuid
@@ -68,15 +69,27 @@ async def upload_photo(
         content_type=content_type,
     )
 
-    return photo_service.save_photo(
+    photo_record = photo_service.save_photo(
         sender_user_id=sender_user_id,
         receiver_user_id=receiver_user_id,
         file_path=s3_path,
         caption=caption,
-        scheduled_at=scheduled_at
+        scheduled_at=scheduled_at,
     )
+
+    if scheduled_at:
+        asyncio.create_task(photo_service.schedule_dispatch(photo_record))
+        logger.info("예약 사진 등록 - photo_id=%s, scheduled_at=%s", photo_record["photo_id"], scheduled_at)
+
+    return photo_record
 
 @router.get("/history", response_model=List[PhotoResponse])
 def get_photo_history(user_id: str):
     logger.info("사진 내역 조회 - user_id=%s", user_id)
     return photo_service.get_photo_history(user_id)
+
+
+@router.get("/received", response_model=List[PhotoResponse])
+def get_received_photos(user_id: str):
+    logger.info("수신 사진 조회 - user_id=%s", user_id)
+    return photo_service.get_received_photos(user_id)
