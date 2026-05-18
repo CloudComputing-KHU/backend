@@ -3,7 +3,7 @@ import os
 import uuid
 from typing import List
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from app.schemas.question import QuestionType
 from app.schemas.answer import (
     AnswerItem,
@@ -11,6 +11,8 @@ from app.schemas.answer import (
     AnswerResponse,
     VoiceUploadResponse,
 )
+from app.services.auth_service import get_current_user
+from app.services.notification_service import notification_service
 from app.services.question_service import question_service
 from app.services.storage_service import storage_service
 
@@ -56,7 +58,8 @@ def _prepare_audio_upload(file: UploadFile, contents: bytes) -> tuple[str, int, 
 
 
 @router.get("/{type}", response_model=List[AnswerItem])
-def get_user_answers(type: QuestionType, user_id: str):
+def get_user_answers(type: QuestionType, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
     logger.info("답변 목록 조회 - type=%s, user_id=%s", type, user_id)
     answers = question_service.get_user_answers(type, user_id)
     for ans in answers:
@@ -65,18 +68,27 @@ def get_user_answers(type: QuestionType, user_id: str):
     return answers
 
 @router.post("/{type}", response_model=AnswerResponse)
-def submit_answer(type: QuestionType, request: AnswerRequest):
-    logger.info("텍스트 답변 저장 - type=%s, user_id=%s", type, request.user_id)
-    question_service.save_answer(type, request)
+def submit_answer(type: QuestionType, request: AnswerRequest, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    logger.info("텍스트 답변 저장 - type=%s, user_id=%s", type, user_id)
+    question_service.save_answer(type, request, user_id)
+    if request.receiver_user_id:
+        notification_service.send(
+            user_id=request.receiver_user_id,
+            title="새 답변이 도착했어요",
+            body="가족이 오늘의 질문에 답했어요.",
+            data={"type": "answer_received", "question_type": type},
+        )
     return AnswerResponse(message="Success")
 
 @router.post("/{type}/voice", response_model=VoiceUploadResponse)
 async def submit_voice_answer(
     type: QuestionType,
-    user_id: str = Form(...),
     question_id: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ):
+    user_id = current_user["sub"]
     logger.info("음성 답변 업로드 - type=%s, user_id=%s, filename=%s", type, user_id, file.filename)
 
     contents = await file.read()

@@ -8,9 +8,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.main import app
+from app.services.auth_service import get_current_user
 from app.services.question_service import mock_answers
 from app.services.storage_service import storage_service
 
+MOCK_USER = {"sub": "parent_001", "email": "test@test.com", "custom:role": "parent"}
+
+app.dependency_overrides[get_current_user] = lambda: MOCK_USER
 
 client = TestClient(app)
 
@@ -26,7 +30,6 @@ def test_submit_voice_answer_returns_voice_metadata() -> None:
     response = client.post(
         "/answers/health/voice",
         data={
-            "user_id": "parent_001",
             "question_id": "q_health_today",
         },
         files={
@@ -47,7 +50,6 @@ def test_submit_voice_answer_rejects_invalid_extension() -> None:
     response = client.post(
         "/answers/health/voice",
         data={
-            "user_id": "parent_001",
             "question_id": "q_health_today",
         },
         files={

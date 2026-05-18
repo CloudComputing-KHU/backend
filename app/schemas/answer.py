@@ -8,10 +8,10 @@ VoiceStatus = Literal["pending", "uploaded", "analyzed"]
 
 
 class AnswerRequest(BaseModel):
-    user_id: str
     question_id: str
     answer_type: AnswerType = "choice"
     answer: Optional[str] = None
+    receiver_user_id: Optional[str] = None  # 알림 수신자 (상대방 user_id)
 
 
 class AnswerResponse(BaseModel):

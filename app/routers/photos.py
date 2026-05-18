@@ -4,9 +4,11 @@ import logging
 import uuid
 from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from PIL import Image, ImageOps
 from app.schemas.photo import PhotoResponse
+from app.services.auth_service import get_current_user
+from app.services.notification_service import notification_service
 from app.services.photo_service import photo_service
 from app.services.storage_service import storage_service
 
@@ -42,12 +44,13 @@ def _compress_image(contents: bytes) -> tuple[bytes, str]:
 
 @router.post("", response_model=PhotoResponse)
 async def upload_photo(
-    sender_user_id: str = Form(...),
     receiver_user_id: str = Form(...),
     caption: Optional[str] = Form(None),
     scheduled_at: Optional[datetime] = Form(None),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ):
+    sender_user_id = current_user["sub"]
     logger.info("사진 업로드 - sender=%s, receiver=%s, filename=%s", sender_user_id, receiver_user_id, file.filename)
 
     valid_ext = (".jpg", ".jpeg", ".png")
@@ -80,18 +83,27 @@ async def upload_photo(
     if scheduled_at:
         asyncio.create_task(photo_service.schedule_dispatch(photo_record))
         logger.info("예약 사진 등록 - photo_id=%s, scheduled_at=%s", photo_record["photo_id"], scheduled_at)
+    else:
+        notification_service.send(
+            user_id=receiver_user_id,
+            title="새 사진이 도착했어요",
+            body=caption or "가족이 사진을 보냈어요.",
+            data={"photo_id": photo_record["photo_id"], "type": "photo_received"},
+        )
 
     return {**photo_record, "presigned_url": storage_service.generate_presigned_url(s3_path)}
 
 @router.get("/history", response_model=List[PhotoResponse])
-def get_photo_history(user_id: str):
+def get_photo_history(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
     logger.info("사진 내역 조회 - user_id=%s", user_id)
     photos = photo_service.get_photo_history(user_id)
     return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]
 
 
 @router.get("/received", response_model=List[PhotoResponse])
-def get_received_photos(user_id: str):
+def get_received_photos(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
     logger.info("수신 사진 조회 - user_id=%s", user_id)
     photos = photo_service.get_received_photos(user_id)
     return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]

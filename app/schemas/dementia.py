@@ -17,7 +17,6 @@ RiskLevel = Literal["low", "medium", "high"]
 
 class DementiaAnalysisRequest(BaseModel):
     """치매 위험 분석 요청 — 이미 S3에 업로드된 음성의 answer_id를 지정"""
-    user_id: str
     answer_id: str
 
 

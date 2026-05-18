@@ -3,7 +3,9 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Optional, List
+
 from app.schemas.photo import PhotoStatus
+from app.services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,5 +54,11 @@ class PhotoService:
             await asyncio.sleep(delay)
         photo_record["status"] = "sent"
         logger.info("예약 사진 발송 - photo_id=%s, receiver=%s", photo_record["photo_id"], photo_record["receiver_user_id"])
+        notification_service.send(
+            user_id=photo_record["receiver_user_id"],
+            title="새 사진이 도착했어요",
+            body=photo_record.get("caption") or "가족이 사진을 보냈어요.",
+            data={"photo_id": photo_record["photo_id"], "type": "photo_received"},
+        )
 
 photo_service = PhotoService()

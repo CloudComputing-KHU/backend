@@ -8,7 +8,7 @@
 import logging
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.schemas.dementia import (
     DementiaAnalysisItem,
@@ -16,6 +16,7 @@ from app.schemas.dementia import (
     DementiaAnalysisResponse,
     DementiaAnalysisResult,
 )
+from app.services.auth_service import get_current_user
 from app.services.dementia_service import dementia_service
 from app.services.question_service import mock_answers
 
@@ -38,19 +39,13 @@ def _find_answer(answer_id: str, user_id: str) -> dict:
 async def request_dementia_analysis(
     request: DementiaAnalysisRequest,
     background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
 ):
-    """
-    이미 업로드된 음성 답변(answer_id)에 대해 치매 위험 분석을 요청합니다.
-    S3에 저장된 음성 → Transcribe STT → Bedrock 분석 파이프라인이 백그라운드에서 실행됩니다.
-    """
-    logger.info(
-        "치매 분석 요청 - user_id=%s, answer_id=%s",
-        request.user_id,
-        request.answer_id,
-    )
+    user_id = current_user["sub"]
+    logger.info("치매 분석 요청 - user_id=%s, answer_id=%s", user_id, request.answer_id)
 
     # 1. 음성 답변 레코드 확인
-    answer_record = _find_answer(request.answer_id, request.user_id)
+    answer_record = _find_answer(request.answer_id, user_id)
 
     if answer_record.get("answer_type") != "voice":
         raise HTTPException(
@@ -67,7 +62,7 @@ async def request_dementia_analysis(
 
     # 2. 분석 레코드 생성
     analysis_record = dementia_service.create_analysis_record(
-        user_id=request.user_id,
+        user_id=user_id,
         answer_id=request.answer_id,
     )
 
@@ -87,7 +82,7 @@ async def request_dementia_analysis(
         message="치매 위험 분석이 요청되었습니다. 분석 완료까지 수 분이 소요될 수 있습니다.",
         analysis_id=analysis_record["analysis_id"],
         answer_id=analysis_record["answer_id"],
-        user_id=analysis_record["user_id"],
+        user_id=user_id,
         status=analysis_record["status"],
         created_at=analysis_record["created_at"],
     )
@@ -109,7 +104,7 @@ def get_dementia_analysis(analysis_id: str):
 
 
 @router.get("", response_model=List[DementiaAnalysisItem])
-def get_user_analyses(user_id: str):
-    """사용자별 치매 분석 이력을 최신순으로 조회합니다."""
+def get_user_analyses(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
     logger.info("치매 분석 이력 조회 - user_id=%s", user_id)
     return dementia_service.get_user_analyses(user_id)

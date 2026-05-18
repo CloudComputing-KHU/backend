@@ -7,6 +7,8 @@
 - **Runtime**: Python 3.12 / FastAPI / uvicorn
 - **Storage**: AWS S3 (음성, 사진 파일)
 - **AI 분석**: AWS Transcribe (STT) → AWS Lambda + OpenAI GPT (치매 위험 감지)
+- **인증**: AWS Cognito (이메일/비밀번호, JWT)
+- **푸시 알림**: Firebase Admin SDK (FCM, Android/iOS 공통)
 - **패키징**: uv + pyproject.toml
 
 ## 아키텍처 흐름
@@ -28,6 +30,8 @@
 | 예약 사진 전송 스케줄러 | 완료 |
 | Presigned URL (음성/사진 접근) | 완료 |
 | STT 파이프라인 (Transcribe) | 코드 완성 — Lambda 배포 필요 |
+| FCM 푸시 알림 | 완료 — Firebase 서비스 계정 설정 필요 |
+| 회원가입 / 로그인 (Cognito) | 완료 |
 
 ---
 
@@ -37,20 +41,26 @@
 app/
   ├── main.py                 
   ├── routers/                # API의 URL 경로와 요청/응답을 처리 역할
+  │   ├── auth.py             # 회원가입, 이메일 인증, 로그인, 토큰 갱신 API
   │   ├── questions.py        # 질문 데이터 제공 관련 API
   │   ├── answers.py          # 답변 데이터 저장/조회 관련 API
   │   ├── photos.py           # 사진 전송 및 조회 관련 API
-  │   └── dementia.py         # 치매 위험 감지 분석 API
+  │   ├── dementia.py         # 치매 위험 감지 분석 API
+  │   └── devices.py          # FCM 디바이스 토큰 등록 API
   ├── schemas/                # 클라이언트와 주고받을 데이터 스키마 정의 (데이터 검증 역할)
+  │   ├── auth.py             # 인증 요청/응답 데이터 형식
   │   ├── question.py         # 질문 데이터 형식
   │   ├── answer.py           # 답변 데이터 형식
   │   ├── photo.py            # 사진 데이터 형식
-  │   └── dementia.py         # 치매 분석 요청/결과 데이터 형식
+  │   ├── dementia.py         # 치매 분석 요청/결과 데이터 형식
+  │   └── device.py           # 디바이스 토큰 등록 형식
   └── services/               # 실제 비즈니스 로직(DB 저장, 필터링, 정렬 등)을 수행
+      ├── auth_service.py     # Cognito 인증 및 JWT 검증 로직
       ├── question_service.py # 질문/답변 in-memory DB 로직
       ├── photo_service.py    # 사진 업로드 및 조회 in-memory DB 로직
       ├── dementia_service.py # 치매 위험 감지 파이프라인 (S3→Transcribe→Lambda/OpenAI)
-      └── storage_service.py  # S3 파일 업로드 로직 (음성, 사진)
+      ├── storage_service.py  # S3 파일 업로드 로직 (음성, 사진)
+      └── notification_service.py  # FCM 푸시 알림 발송 (Firebase Admin SDK)
 lambda/
   └── dementia_analyzer/
       ├── handler.py          # Lambda 함수 (OpenAI GPT 치매 분석)
@@ -70,6 +80,38 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 
 ## 구현된 API 목록
 
+### 인증
+
+#### 1. 회원가입
+- **POST** `/auth/signup`
+- **요청 Body**: `role`(child/parent), `name`, `email`, `password`
+- 가입 성공 시 이메일로 인증 코드 발송
+
+#### 2. 이메일 인증
+- **POST** `/auth/confirm`
+- **요청 Body**: `email`, `confirmation_code`
+
+#### 3. 로그인
+- **POST** `/auth/login`
+- **요청 Body**: `email`, `password`
+- **응답**: `access_token`, `id_token`, `refresh_token`, `expires_in`
+- 이후 API 호출 시 `Authorization: Bearer <id_token>` 헤더 사용
+
+#### 4. 토큰 갱신
+- **POST** `/auth/refresh`
+- **요청 Body**: `refresh_token`
+- **응답**: `access_token`, `id_token`, `expires_in`
+
+---
+
+> **인증 필요**: 아래 모든 API는 로그인 후 발급받은 `id_token`을 헤더에 포함해야 합니다.
+> ```
+> Authorization: Bearer <id_token>
+> ```
+> `user_id`는 토큰에서 자동 추출되므로 별도로 전달하지 않습니다.
+
+---
+
 ### 1. 오늘의 질문 조회
 - **GET** `/questions/{type}`
 - **설명**: 부모님 화면에 띄울 질문과 선택지를 가져옵니다.
@@ -78,20 +120,20 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 ### 2. 질문에 대한 선택형(텍스트) 답변 저장
 - **POST** `/answers/{type}`
 - **설명**: 부모님이 선택하신 선택형 답변을 저장합니다. (저장 시 현재 시간 `created_at`이 자동 추가됩니다)
-- **파라미터**: `type` 경로 파라미터 
-- **요청 Body**: `user_id`(유저 식별자), `question_id`(질문 ID), `answer`(선택/입력한 텍스트)
+- **파라미터**: `type` 경로 파라미터
+- **요청 Body**: `question_id`(질문 ID), `answer`(선택/입력한 텍스트), `receiver_user_id`(알림 받을 상대방 ID, 선택)
 
 ### 3. 부모님 답변 목록 조회 (자녀용)
-- **GET** `/answers/{type}?user_id={user_id}`
+- **GET** `/answers/{type}`
 - **설명**: 자녀가 부모님의 상태를 확인할 수 있도록, 특정 부모가 남긴 답변들을 최신 시간순으로 정렬하여 보여줍니다.
-- **파라미터**: `type` 경로 파라미터 / `user_id` Query 파라미터
+- **파라미터**: `type` 경로 파라미터
 - **특징**: 음성 답변의 경우 `voice_status`와 함께 바로 재생 가능한 `voice_url` (Presigned URL, 7일 유효)도 함께 반환합니다.
 
 ### 4. 음성 답변 업로드
 - **POST** `/answers/{type}/voice`
 - **설명**: 부모님이 녹음하신 음성 파일(`.mp3`, `.wav`, `.m4a`)을 업로드합니다.
 - **파라미터**: `type` 경로 파라미터
-- **요청 Form**: `user_id`, `question_id`, `file` (Multipart/form-data)
+- **요청 Form**: `question_id`, `file` (Multipart/form-data)
 - **특징**:
   - 파일 수신 시 확장자, MIME 타입, 빈 파일 여부, 최대 크기(10MB)를 검증합니다.
   - 업로드 성공 시 `answer_id`, 저장 파일명, 원본 파일명, 파일 크기, `voice_status`, `voice_url`을 함께 반환합니다.
@@ -101,23 +143,23 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 ### 5. 사진 전송 (즉시/예약)
 - **POST** `/photos`
 - **설명**: 서로의 일상 사진을 전송하거나 특정 시간에 전송되도록 예약합니다.
-- **파라미터**: `file`, `sender_user_id`, `receiver_user_id`, `caption`, `scheduled_at` (Multipart/form-data)
+- **요청 Form**: `receiver_user_id`, `file`, `caption`(선택), `scheduled_at`(선택) (Multipart/form-data)
 - **특징**:
   - `scheduled_at` 파라미터가 제공될 경우 `scheduled` 상태로 저장되며, 서버 내 asyncio 스케줄러가 해당 시간에 자동 발송 처리합니다.
   - 응답에 바로 열람 가능한 `presigned_url` (Presigned URL, 7일 유효)이 포함됩니다.
 
 ### 6. 사진 전송 내역 조회 (발신자 기준)
-- **GET** `/photos/history?user_id={user_id}`
-- **설명**: 특정 사용자가 전송한 사진 목록을 최신순으로 조회합니다. 각 항목에 `presigned_url`이 포함됩니다.
+- **GET** `/photos/history`
+- **설명**: 본인이 전송한 사진 목록을 최신순으로 조회합니다. 각 항목에 `presigned_url`이 포함됩니다.
 
 ### 7. 수신 사진 조회 (수신자 기준)
-- **GET** `/photos/received?user_id={user_id}`
-- **설명**: 특정 사용자가 받은 사진 목록을 최신순으로 조회합니다. `status=sent`인 사진만 반환하며, 각 항목에 `presigned_url`이 포함됩니다.
+- **GET** `/photos/received`
+- **설명**: 본인이 받은 사진 목록을 최신순으로 조회합니다. `status=sent`인 사진만 반환하며, 각 항목에 `presigned_url`이 포함됩니다.
 
 ### 8. 치매 위험 분석 요청
 - **POST** `/dementia/analyze`
 - **설명**: 이미 업로드된 음성 답변에 대해 치매 위험 분석을 요청합니다.
-- **요청 Body**: `user_id`(부모 식별자), `answer_id`(음성 답변 ID)
+- **요청 Body**: `answer_id`(음성 답변 ID)
 - **동작 방식**:
   1. S3에 저장된 음성 파일을 AWS Transcribe로 전달하여 텍스트로 변환합니다.
   2. 변환된 텍스트를 Lambda + API Gateway (OpenAI GPT)에 전달하여 치매 위험 지표를 분석합니다.
@@ -158,9 +200,35 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
   ```
 
 ### 10. 사용자별 치매 분석 이력 조회
-- **GET** `/dementia?user_id={user_id}`
-- **설명**: 특정 부모의 치매 분석 이력을 최신순으로 조회합니다.
-- **파라미터**: `user_id` Query 파라미터
+- **GET** `/dementia`
+- **설명**: 본인의 치매 분석 이력을 최신순으로 조회합니다.
+
+### 11. FCM 디바이스 토큰 등록
+- **POST** `/devices/register`
+- **설명**: Flutter 앱에서 획득한 FCM 토큰을 백엔드에 등록합니다. 앱 실행 시마다 호출해 토큰을 최신 상태로 유지합니다.
+- **요청 Body**: `fcm_token`
+- **응답 예시**:
+  ```json
+  { "message": "Device registered" }
+  ```
+
+---
+
+## 푸시 알림
+
+Firebase Cloud Messaging(FCM)을 통해 Android/iOS 모두 지원합니다.
+
+### 자동 발송 이벤트
+
+| 이벤트 | 수신자 | 제목 |
+|--------|--------|------|
+| 사진 즉시 전송 | 사진 수신자 | 새 사진이 도착했어요 |
+| 예약 사진 발송됨 | 사진 수신자 | 새 사진이 도착했어요 |
+| 부모님 답변 제출 | `receiver_user_id` (자녀) | 새 답변이 도착했어요 |
+| 치매 분석 완료 | 분석 요청한 본인 | 건강 분석이 완료됐어요 |
+
+알림 `data` 페이로드에 `type`, `photo_id` / `analysis_id` 등이 포함되어 있어 Flutter에서 알림 탭 시 해당 화면으로 이동할 수 있습니다.
+
 
 ---
 
@@ -255,13 +323,18 @@ cp .env.example .env
 그 다음 `.env`에서 아래 값을 직접 채우면 됩니다.
 
 ```env
+# AWS
 AWS_ACCESS_KEY_ID=your-access-key-id
 AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_REGION=ap-northeast-2
+AWS_REGION=us-east-1
 S3_BUCKET_NAME=cloud-compute-team-e
 S3_VOICE_PREFIX=voices
 S3_PHOTO_PREFIX=photos
 S3_URL_MODE=s3_uri
+
+# 푸시 알림 (둘 중 하나)
+FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/serviceAccountKey.json
+# FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
 ```
 
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`는 직접 편집해서 넣으면 됩니다.

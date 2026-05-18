@@ -18,6 +18,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
+from app.services.notification_service import notification_service
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -305,6 +307,19 @@ class DementiaService:
                 analysis_record["analysis_id"],
                 analysis_record["risk_level"],
                 analysis_record["risk_score"],
+            )
+            risk_label = {"low": "낮음", "medium": "보통", "high": "높음"}.get(
+                analysis_record["risk_level"], analysis_record["risk_level"]
+            )
+            notification_service.send(
+                user_id=analysis_record["user_id"],
+                title="건강 분석이 완료됐어요",
+                body=f"위험도: {risk_label}",
+                data={
+                    "analysis_id": analysis_record["analysis_id"],
+                    "risk_level": analysis_record["risk_level"],
+                    "type": "dementia_analysis_done",
+                },
             )
 
         except HTTPException:

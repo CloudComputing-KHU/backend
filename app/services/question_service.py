@@ -44,12 +44,12 @@ class QuestionService:
         return questions[0] if questions else None
 
     @staticmethod
-    def save_answer(q_type: QuestionType, request: AnswerRequest) -> dict:
+    def save_answer(q_type: QuestionType, request: AnswerRequest, user_id: str) -> dict:
         # TODO: DynamoDB 연동
         answer_record = {
             "answer_id": f"answer_{uuid.uuid4().hex[:8]}",
             "type": q_type,
-            "user_id": request.user_id,
+            "user_id": user_id,
             "question_id": request.question_id,
             "answer_type": request.answer_type,
             "answer": request.answer,
