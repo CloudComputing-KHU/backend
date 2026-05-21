@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import answers, auth, dementia, devices, photos, questions
+from app.routers import answers, auth, dementia, devices, notifications, photos, questions
 
 
 logging.basicConfig(
@@ -28,6 +28,7 @@ app.include_router(answers.router, prefix="/answers", tags=["Answers"])
 app.include_router(photos.router, prefix="/photos", tags=["Photos"])
 app.include_router(dementia.router, prefix="/dementia", tags=["Dementia"])
 app.include_router(devices.router, prefix="/devices", tags=["Devices"])
+app.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
 
 
 @app.get("/", tags=["Health Check"])

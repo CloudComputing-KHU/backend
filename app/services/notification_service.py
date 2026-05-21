@@ -1,18 +1,14 @@
-"""
-Firebase Admin SDK 기반 FCM 푸시 알림 서비스
-- 디바이스 토큰 등록/조회 (in-memory, 향후 DynamoDB 연동)
-- Firebase를 통해 Android/iOS 알림 발송
-"""
-
 import json
 import logging
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# user_id → fcm_token 매핑 (향후 DynamoDB 연동)
 _device_tokens: dict[str, str] = {}
+_notifications: dict[str, list[dict]] = {}
 
 
 class NotificationService:
@@ -20,7 +16,6 @@ class NotificationService:
         self._app = None
 
     def _get_app(self):
-        """Firebase Admin SDK 초기화 (lazy, 1회)"""
         import firebase_admin
         from firebase_admin import credentials
 
@@ -50,8 +45,23 @@ class NotificationService:
     def get_token(self, user_id: str) -> Optional[str]:
         return _device_tokens.get(user_id)
 
+    def _save_notification(self, user_id: str, title: str, body: str, data: Optional[dict]) -> None:
+        record = {
+            "notification_id": uuid.uuid4().hex,
+            "title": title,
+            "body": body,
+            "data": data,
+            "is_read": False,
+            "created_at": datetime.now(timezone.utc),
+        }
+        _notifications.setdefault(user_id, []).insert(0, record)
+
+    def get_notifications(self, user_id: str) -> list[dict]:
+        return _notifications.get(user_id, [])
+
     def send(self, user_id: str, title: str, body: str, data: Optional[dict] = None) -> bool:
-        """user_id 디바이스로 푸시 알림 발송. 성공 여부 반환."""
+        self._save_notification(user_id, title, body, data)
+
         token = self.get_token(user_id)
         if not token:
             logger.warning("FCM 토큰 없음 - user_id=%s, 알림 건너뜀", user_id)
