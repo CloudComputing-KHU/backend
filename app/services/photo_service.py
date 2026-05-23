@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 # 사진 데이터를 저장할 in-memory mock 리스트
 mock_photos = []
+mock_reactions = []
 
 class PhotoService:
     @staticmethod
@@ -60,5 +61,27 @@ class PhotoService:
             body=photo_record.get("caption") or "가족이 사진을 보냈어요.",
             data={"photo_id": photo_record["photo_id"], "type": "photo_received"},
         )
+
+    @staticmethod
+    def save_reaction(
+        photo_id: str,
+        user_id: str,
+        reaction_type: str,
+        label: Optional[str] = None,
+        voice_url: Optional[str] = None,
+        duration_seconds: Optional[int] = None,
+    ) -> dict:
+        record = {
+            "reaction_id": f"reaction_{uuid.uuid4().hex[:8]}",
+            "photo_id": photo_id,
+            "user_id": user_id,
+            "reaction_type": reaction_type,
+            "label": label,
+            "voice_url": voice_url,
+            "duration_seconds": duration_seconds,
+            "created_at": datetime.now(),
+        }
+        mock_reactions.append(record)
+        return record
 
 photo_service = PhotoService()

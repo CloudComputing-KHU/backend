@@ -1,12 +1,13 @@
 import asyncio
 import io
 import logging
+import os
 import uuid
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from PIL import Image, ImageOps
-from app.schemas.photo import PhotoResponse
+from app.schemas.photo import PhotoResponse, QuickReactionRequest, ReactionResponse
 from app.services.auth_service import get_current_user
 from app.services.notification_service import notification_service
 from app.services.photo_service import photo_service
@@ -107,3 +108,52 @@ def get_received_photos(current_user: dict = Depends(get_current_user)):
     logger.info("수신 사진 조회 - user_id=%s", user_id)
     photos = photo_service.get_received_photos(user_id)
     return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]
+
+
+@router.post("/{photo_id}/reactions/quick", response_model=ReactionResponse)
+def save_quick_reaction(
+    photo_id: str,
+    request: QuickReactionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["sub"]
+    logger.info("빠른 반응 저장 - photo_id=%s, user_id=%s, label=%s", photo_id, user_id, request.label)
+    record = photo_service.save_reaction(
+        photo_id=photo_id,
+        user_id=user_id,
+        reaction_type="quick",
+        label=request.label,
+    )
+    return {**record, "presigned_url": None}
+
+
+@router.post("/{photo_id}/reactions/voice", response_model=ReactionResponse)
+async def save_voice_reaction(
+    photo_id: str,
+    duration_seconds: Optional[int] = Form(None),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["sub"]
+    logger.info("음성 반응 저장 - photo_id=%s, user_id=%s, filename=%s", photo_id, user_id, file.filename)
+
+    valid_ext = (".m4a", ".wav", ".mp3")
+    if not file.filename.lower().endswith(valid_ext):
+        raise HTTPException(status_code=400, detail="m4a, wav, mp3 파일만 업로드할 수 있습니다.")
+
+    contents = await file.read()
+    stored_filename = uuid.uuid4().hex + os.path.splitext(file.filename)[1].lower()
+    voice_url = storage_service.upload_voice(
+        user_id=user_id,
+        stored_filename=stored_filename,
+        contents=contents,
+        content_type=file.content_type,
+    )
+    record = photo_service.save_reaction(
+        photo_id=photo_id,
+        user_id=user_id,
+        reaction_type="voice",
+        voice_url=voice_url,
+        duration_seconds=duration_seconds,
+    )
+    return {**record, "presigned_url": storage_service.generate_presigned_url(voice_url)}
