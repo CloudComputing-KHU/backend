@@ -64,6 +64,15 @@ class AuthService:
         except ClientError as e:
             code = e.response["Error"]["Code"]
             if code == "UsernameExistsException":
+                # 인증 미완료(UNCONFIRMED) 상태면 새 인증 코드를 재발송
+                try:
+                    self._get_client().resend_confirmation_code(
+                        ClientId=self._app_client_id,
+                        Username=email,
+                    )
+                    return {}
+                except ClientError:
+                    pass
                 raise HTTPException(status_code=409, detail="이미 사용 중인 이메일입니다.")
             if code == "InvalidPasswordException":
                 raise HTTPException(status_code=400, detail="비밀번호가 요구사항을 충족하지 않습니다.")
