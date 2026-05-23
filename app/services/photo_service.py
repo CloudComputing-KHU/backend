@@ -63,6 +63,10 @@ class PhotoService:
         )
 
     @staticmethod
+    def get_reactions(photo_id: str) -> List[dict]:
+        return [r for r in mock_reactions if r["photo_id"] == photo_id]
+
+    @staticmethod
     def save_reaction(
         photo_id: str,
         user_id: str,

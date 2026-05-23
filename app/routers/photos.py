@@ -110,6 +110,19 @@ def get_received_photos(current_user: dict = Depends(get_current_user)):
     return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]
 
 
+@router.get("/{photo_id}/reactions", response_model=List[ReactionResponse])
+def get_reactions(
+    photo_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    logger.info("반응 조회 - photo_id=%s", photo_id)
+    reactions = photo_service.get_reactions(photo_id)
+    return [
+        {**r, "presigned_url": storage_service.generate_presigned_url(r["voice_url"]) if r["voice_url"] else None}
+        for r in reactions
+    ]
+
+
 @router.post("/{photo_id}/reactions/quick", response_model=ReactionResponse)
 def save_quick_reaction(
     photo_id: str,
