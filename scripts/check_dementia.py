@@ -8,6 +8,7 @@ import time
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.auth_service import get_current_user
 from app.services.question_service import mock_answers
 from app.services.dementia_service import mock_analyses, dementia_service
 from app.services.storage_service import storage_service
@@ -16,13 +17,42 @@ from app.services.storage_service import storage_service
 def main() -> None:
     mock_answers.clear()
     mock_analyses.clear()
+
+    # Auth mock
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "parent_001",
+        "email": "test@test.com",
+        "custom:role": "parent",
+    }
+
     client = TestClient(app)
 
-    # S3 업로드 mock
+    # S3 및 Presigned URL mock
     original_upload_voice = storage_service.upload_voice
     storage_service.upload_voice = lambda user_id, stored_filename, contents, content_type: (
         f"s3://mock-bucket/voices/{user_id}/{stored_filename}"
     )
+    original_generate_presigned_url = storage_service.generate_presigned_url
+    storage_service.generate_presigned_url = lambda s3_uri, expiration=604800: (
+        f"https://mock-bucket.s3.amazonaws.com/{s3_uri.split('s3://')[-1]}"
+    )
+
+    # Transcribe 및 LLM 분석 mock
+    original_start_transcription = dementia_service._start_transcription
+    dementia_service._start_transcription = lambda record, key: "mock-job-name"
+
+    original_wait_for_transcription = dementia_service._wait_for_transcription
+    dementia_service._wait_for_transcription = lambda job, record: (
+        "오늘 아침에... 약을 먹었는지 기억이 잘 안 나요. 밥은 먹었나? 여기가 어디지?"
+    )
+
+    original_analyze_with_llm = dementia_service._analyze_with_llm
+    dementia_service._analyze_with_llm = lambda transcript, record: {
+        "risk_level": "medium",
+        "risk_score": 0.4,
+        "analysis_summary": "약간의 단기 기억 감퇴 조짐이 보입니다.",
+        "indicators": ["short_term_memory_loss"]
+    }
 
     try:
         # 1. 음성 답변 업로드
@@ -129,6 +159,11 @@ def main() -> None:
 
     finally:
         storage_service.upload_voice = original_upload_voice
+        storage_service.generate_presigned_url = original_generate_presigned_url
+        dementia_service._start_transcription = original_start_transcription
+        dementia_service._wait_for_transcription = original_wait_for_transcription
+        dementia_service._analyze_with_llm = original_analyze_with_llm
+        app.dependency_overrides.clear()
 
 
 if __name__ == "__main__":
