@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## 2026-05-24
+
+### Author
+- `kangtaeyeong`
+
+### Changes
+- Split AWS region configuration by responsibility.
+- Updated Cognito-related code to use `AUTH_AWS_REGION`.
+- Updated S3/Transcribe-related code to use `DATA_AWS_REGION`.
+- Updated `.env.example`, `README.md`, and `AGENTS.md` to document the separated region variables.
+
+### Verified
+- `UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py -q` 통과.
+
+### Follow-up
+- Apply the same region separation when DynamoDB is added.
+
+---
+
 ## 2026-05-23
 
 ### Author
