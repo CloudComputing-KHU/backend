@@ -88,12 +88,13 @@
 - Expected environment variables for S3 integration:
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
-  - `AWS_REGION`
+  - `DATA_AWS_REGION`
   - `S3_BUCKET_NAME`
   - `S3_VOICE_PREFIX`
   - `S3_PHOTO_PREFIX`
 - Default assumption unless the user says otherwise:
-  - `AWS_REGION=ap-northeast-2`
+  - `DATA_AWS_REGION=ap-northeast-2`
+  - `AUTH_AWS_REGION=us-east-1`
 - Future DynamoDB draft assumed in docs:
   - `answers` table for answer metadata and voice analysis state
   - `photos` table for photo transmission metadata

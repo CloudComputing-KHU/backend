@@ -392,10 +392,15 @@ cp .env.example .env
 그 다음 `.env`에서 아래 값을 직접 채우면 됩니다.
 
 ```env
-# AWS
+# AWS - Auth (Cognito)
+AUTH_AWS_REGION=us-east-1
+COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx
+COGNITO_APP_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# AWS - Data (S3 / Transcribe / future DynamoDB)
 AWS_ACCESS_KEY_ID=your-access-key-id
 AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_REGION=us-east-1
+DATA_AWS_REGION=ap-northeast-2
 S3_BUCKET_NAME=cloud-compute-team-e
 S3_VOICE_PREFIX=voices
 S3_PHOTO_PREFIX=photos
@@ -542,7 +547,7 @@ aws s3api head-object \
 ```env
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=ap-northeast-2
+DATA_AWS_REGION=ap-northeast-2
 S3_BUCKET_NAME=...
 S3_VOICE_PREFIX=voices
 S3_PHOTO_PREFIX=photos
@@ -552,10 +557,11 @@ S3_PHOTO_PREFIX=photos
 
 - `AWS_ACCESS_KEY_ID`: 업로드 권한이 있는 IAM 사용자 또는 역할의 액세스 키
 - `AWS_SECRET_ACCESS_KEY`: 해당 시크릿 키
-- `AWS_REGION`: 버킷이 생성된 리전
+- `DATA_AWS_REGION`: 버킷과 데이터 처리 리전
 - `S3_BUCKET_NAME`: 실제 업로드 대상 버킷명
 - `S3_VOICE_PREFIX`: 음성 파일을 저장할 S3 prefix
 - `S3_PHOTO_PREFIX`: 사진 파일을 저장할 S3 prefix
+- `AUTH_AWS_REGION`: Cognito User Pool 리전
 
 ### 추가로 정하면 좋은 것
 

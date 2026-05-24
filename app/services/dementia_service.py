@@ -39,7 +39,7 @@ class DementiaService:
         if self._transcribe_client is None:
             self._transcribe_client = boto3.client(
                 "transcribe",
-                region_name=os.getenv("AWS_REGION", "ap-northeast-2"),
+                region_name=os.getenv("DATA_AWS_REGION", "ap-northeast-2"),
             )
         return self._transcribe_client
 
