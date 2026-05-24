@@ -28,20 +28,31 @@ mock_analyses: list[dict] = []
 
 
 class DementiaService:
-    """S3 음성 → Transcribe STT → Lambda(OpenAI) 치매 분석 파이프라인"""
+    """S3 음성 ➔ OpenAI Whisper STT ➔ Lambda(OpenAI) 치매 분석 파이프라인"""
 
     def __init__(self) -> None:
-        self._transcribe_client = None
+        self._s3_client = None
+        self._openai_client = None
 
-    # ────────────────────────── AWS 클라이언트 lazy init ──
+    # ────────────────────────── AWS 및 OpenAI 클라이언트 lazy init ──
 
-    def _get_transcribe_client(self):
-        if self._transcribe_client is None:
-            self._transcribe_client = boto3.client(
-                "transcribe",
-                region_name=os.getenv("AWS_REGION", "ap-northeast-2"),
+    def _get_s3_client(self):
+        if self._s3_client is None:
+            self._s3_client = boto3.client(
+                "s3",
+                region_name=os.getenv("DATA_AWS_REGION", "ap-northeast-2"),
             )
-        return self._transcribe_client
+        return self._s3_client
+
+    def _get_openai_client(self):
+        if self._openai_client is None:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                logger.error("OPENAI_API_KEY 환경변수가 설정되지 않음")
+                raise ValueError("OPENAI_API_KEY environment variable is not set")
+            from openai import OpenAI
+            self._openai_client = OpenAI(api_key=api_key)
+        return self._openai_client
 
     # ────────────────────────── 분석 레코드 CRUD ──
 
@@ -75,7 +86,7 @@ class DementiaService:
         filtered = [a for a in mock_analyses if a["user_id"] == user_id]
         return sorted(filtered, key=lambda x: x["created_at"], reverse=True)
 
-    # ────────────────────────── 1단계: S3 URI → Transcribe ──
+    # ────────────────────────── S3 URI 파싱 ──
 
     def _resolve_s3_uri(self, voice_file_key: str) -> tuple[str, str]:
         """
@@ -90,7 +101,6 @@ class DementiaService:
             return bucket, key
 
         if voice_file_key.startswith("https://"):
-            # https://bucket.s3.region.amazonaws.com/key
             without_scheme = voice_file_key[8:]
             host, _, key = without_scheme.partition("/")
             bucket = host.split(".")[0]
@@ -98,90 +108,64 @@ class DementiaService:
 
         raise HTTPException(status_code=400, detail=f"Invalid voice_file_key format: {voice_file_key}")
 
-    def _start_transcription(self, analysis_record: dict, voice_file_key: str) -> str:
-        """Transcribe 작업을 시작하고 job name을 반환한다."""
+    # ────────────────────────── OpenAI Whisper STT 변환 ──
+
+    def _speech_to_text_whisper(self, voice_file_key: str, analysis_record: dict) -> str:
+        """S3에서 음성 파일을 다운로드하여 OpenAI Whisper API로 텍스트 변환한다."""
+        import tempfile
+        
         bucket, key = self._resolve_s3_uri(voice_file_key)
-        media_uri = f"s3://{bucket}/{key}"
-
-        # 확장자로 미디어 포맷 결정
-        extension = key.rsplit(".", 1)[-1].lower() if "." in key else "mp4"
-        media_format_map = {
-            "mp3": "mp3",
-            "wav": "wav",
-            "m4a": "mp4",
-            "mp4": "mp4",
-        }
-        media_format = media_format_map.get(extension, "mp4")
-
-        job_name = f"dementia-{analysis_record['analysis_id']}-{uuid.uuid4().hex[:6]}"
-
-        logger.info(
-            "Transcribe 작업 시작 - job=%s, media_uri=%s, format=%s",
-            job_name, media_uri, media_format,
-        )
-
+        
         try:
-            self._get_transcribe_client().start_transcription_job(
-                TranscriptionJobName=job_name,
-                Media={"MediaFileUri": media_uri},
-                MediaFormat=media_format,
-                LanguageCode="ko-KR",
-            )
-        except (ClientError, BotoCoreError) as exc:
-            logger.exception("Transcribe 시작 실패 - job=%s", job_name)
-            analysis_record["status"] = "failed"
-            raise HTTPException(status_code=502, detail=f"Transcribe start failed: {exc}") from exc
-
-        return job_name
-
-    def _wait_for_transcription(self, job_name: str, analysis_record: dict) -> str:
-        """Transcribe 작업 완료를 폴링하고, 결과 텍스트를 반환한다."""
-        client = self._get_transcribe_client()
-        max_wait = 300  # 최대 5분
-        poll_interval = 5
-
-        elapsed = 0
-        while elapsed < max_wait:
-            try:
-                resp = client.get_transcription_job(TranscriptionJobName=job_name)
-            except (ClientError, BotoCoreError) as exc:
-                logger.exception("Transcribe 상태 조회 실패 - job=%s", job_name)
-                analysis_record["status"] = "failed"
-                raise HTTPException(status_code=502, detail=f"Transcribe polling failed: {exc}") from exc
-
-            status = resp["TranscriptionJob"]["TranscriptionJobStatus"]
-            logger.info("Transcribe 상태 - job=%s, status=%s", job_name, status)
-
-            if status == "COMPLETED":
-                transcript_uri = resp["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-                return self._fetch_transcript_text(transcript_uri)
-
-            if status == "FAILED":
-                reason = resp["TranscriptionJob"].get("FailureReason", "unknown")
-                logger.error("Transcribe 실패 - job=%s, reason=%s", job_name, reason)
-                analysis_record["status"] = "failed"
-                raise HTTPException(status_code=502, detail=f"Transcribe failed: {reason}")
-
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-
-        analysis_record["status"] = "failed"
-        raise HTTPException(status_code=504, detail="Transcribe timeout")
-
-    def _fetch_transcript_text(self, transcript_uri: str) -> str:
-        """Transcribe 결과 JSON에서 텍스트를 추출한다."""
-        try:
-            with urllib.request.urlopen(transcript_uri) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            transcripts = data.get("results", {}).get("transcripts", [])
-            if transcripts:
-                return transcripts[0].get("transcript", "")
-            return ""
+            # 1. S3에서 파일 다운로드
+            s3 = self._get_s3_client()
+            logger.info("S3 음성 파일 다운로드 중 - bucket=%s, key=%s", bucket, key)
+            s3_response = s3.get_object(Bucket=bucket, Key=key)
+            audio_bytes = s3_response["Body"].read()
+            
+            # 2. 오디오 확장자에 맞게 임시 파일 작성
+            extension = key.rsplit(".", 1)[-1].lower() if "." in key else "m4a"
+            
+            with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_filepath = temp_file.name
+                
+            logger.info("임시 오디오 파일 저장 완료 - path=%s", temp_filepath)
         except Exception as exc:
-            logger.exception("Transcribe 결과 다운로드 실패 - uri=%s", transcript_uri)
-            raise HTTPException(status_code=502, detail=f"Failed to fetch transcript: {exc}") from exc
+            logger.exception("S3 다운로드 혹은 임시 파일 생성 실패")
+            analysis_record["status"] = "failed"
+            raise HTTPException(status_code=502, detail=f"Audio download failed: {exc}") from exc
 
-    # ────────────────────────── 2단계: Lambda(OpenAI) 치매 분석 ──
+        try:
+            # 3. OpenAI Whisper API 호출
+            logger.info("OpenAI Whisper API 호출 중 - filepath=%s", temp_filepath)
+            client = self._get_openai_client()
+            
+            with open(temp_filepath, "rb") as audio_file:
+                transcript_obj = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="ko"
+                )
+                
+            transcript_text = transcript_obj.text
+            logger.info("Whisper STT 완료 - transcript_length=%d", len(transcript_text))
+            return transcript_text
+            
+        except Exception as exc:
+            logger.exception("OpenAI Whisper API 호출 실패")
+            analysis_record["status"] = "failed"
+            raise HTTPException(status_code=502, detail=f"Whisper STT failed: {exc}") from exc
+            
+        finally:
+            # 4. 임시 파일 정리
+            if os.path.exists(temp_filepath):
+                try:
+                    os.remove(temp_filepath)
+                except Exception:
+                    pass
+
+    # ────────────────────────── Lambda(OpenAI) 치매 분석 ──
 
     def _analyze_with_llm(self, transcript: str, analysis_record: dict) -> dict:
         """
@@ -254,21 +238,18 @@ class DementiaService:
     async def run_analysis_pipeline(self, analysis_record: dict, voice_file_key: str) -> None:
         """
         백그라운드에서 실행되는 전체 분석 파이프라인:
-        1. S3 음성 → Transcribe STT
-        2. STT 결과 → Lambda(OpenAI) 치매 위험 분석
+        1. S3 음성 ➔ OpenAI Whisper STT
+        2. STT 결과 ➔ Lambda(OpenAI) 치매 위험 분석
         """
         import asyncio
 
         try:
-            # 1단계: Transcribe
+            # 1단계: Whisper STT 변환
             analysis_record["status"] = "transcribing"
-            logger.info("파이프라인 시작 - analysis_id=%s", analysis_record["analysis_id"])
+            logger.info("Whisper 파이프라인 시작 - analysis_id=%s", analysis_record["analysis_id"])
 
-            job_name = await asyncio.to_thread(
-                self._start_transcription, analysis_record, voice_file_key
-            )
             transcript = await asyncio.to_thread(
-                self._wait_for_transcription, job_name, analysis_record
+                self._speech_to_text_whisper, voice_file_key, analysis_record
             )
 
             analysis_record["status"] = "transcribed"
