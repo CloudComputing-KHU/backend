@@ -2,6 +2,7 @@ import mimetypes
 import os
 from dataclasses import dataclass
 import logging
+from botocore.client import Config
 
 import boto3
 from botocore.exceptions import (
@@ -65,7 +66,10 @@ class StorageService:
 
     def _client_for(self):
         if self._client is None:
-            self._client = boto3.client("s3")
+            self._client = boto3.client(
+                "s3",
+                config=Config(signature_version="s3v4"),
+            )
         return self._client
 
     @staticmethod
