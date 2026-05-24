@@ -68,6 +68,7 @@ class StorageService:
         if self._client is None:
             self._client = boto3.client(
                 "s3",
+                region_name="ap-northeast-2",
                 config=Config(signature_version="s3v4"),
             )
         return self._client
