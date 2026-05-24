@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from PIL import Image, ImageOps
 from app.schemas.photo import PhotoResponse, QuickReactionRequest, ReactionResponse
 from app.services.auth_service import get_current_user
+from app.services.family_service import family_service, get_role_from_claims
 from app.services.notification_service import notification_service
 from app.services.photo_service import photo_service
 from app.services.storage_service import storage_service
@@ -43,16 +44,34 @@ def _compress_image(contents: bytes) -> tuple[bytes, str]:
         img.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
         return out.getvalue(), ".jpeg"
 
+
+def _resolve_photo_receiver_user_id(current_user: dict) -> str:
+    user_id = current_user["sub"]
+    role = get_role_from_claims(current_user)
+    linked_user_id = family_service.require_linked_user_id(user_id)
+    logger.info(
+        "사진 수신자 결정 - sender=%s, role=%s, resolved_receiver=%s",
+        user_id,
+        role,
+        linked_user_id,
+    )
+    return linked_user_id
+
 @router.post("", response_model=PhotoResponse)
 async def upload_photo(
-    receiver_user_id: str = Form(...),
     caption: Optional[str] = Form(None),
     scheduled_at: Optional[datetime] = Form(None),
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
     sender_user_id = current_user["sub"]
-    logger.info("사진 업로드 - sender=%s, receiver=%s, filename=%s", sender_user_id, receiver_user_id, file.filename)
+    resolved_receiver_user_id = _resolve_photo_receiver_user_id(current_user)
+    logger.info(
+        "사진 업로드 - sender=%s, receiver=%s, filename=%s",
+        sender_user_id,
+        resolved_receiver_user_id,
+        file.filename,
+    )
 
     valid_ext = (".jpg", ".jpeg", ".png")
     if not file.filename.lower().endswith(valid_ext):
@@ -75,18 +94,18 @@ async def upload_photo(
 
     photo_record = photo_service.save_photo(
         sender_user_id=sender_user_id,
-        receiver_user_id=receiver_user_id,
+        receiver_user_id=resolved_receiver_user_id,
         file_path=s3_path,
         caption=caption,
         scheduled_at=scheduled_at,
     )
 
-    if scheduled_at:
+    if photo_record["status"] == "scheduled":
         asyncio.create_task(photo_service.schedule_dispatch(photo_record))
         logger.info("예약 사진 등록 - photo_id=%s, scheduled_at=%s", photo_record["photo_id"], scheduled_at)
     else:
         notification_service.send(
-            user_id=receiver_user_id,
+            user_id=resolved_receiver_user_id,
             title="새 사진이 도착했어요",
             body=caption or "가족이 사진을 보냈어요.",
             data={"photo_id": photo_record["photo_id"], "type": "photo_received"},

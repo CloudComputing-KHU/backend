@@ -1,5 +1,84 @@
 # CHANGELOG
 
+## 2026-05-25
+
+### Author
+- `kangtaeyeong`
+
+### Changes
+- Added family-link response name enrichment so `GET /family/me` returns `parent_name` and `child_name`.
+- Normalized past/current `scheduled_at` values in photo upload so they are treated as immediate sends instead of delayed `scheduled` records.
+- Removed obsolete client input parameters from request contracts:
+  - `receiver_user_id` from `POST /answers/{type}`
+  - `receiver_user_id` from `POST /photos`
+- Updated backend request handling so answer notifications and photo receiver resolution rely only on token identity plus family-link data.
+- Updated tests and README to match the simplified FE/BE contract.
+
+### Verified
+- `UV_CACHE_DIR=.uv-cache uv run pytest test/test_answers_router.py test/test_family_router.py test/test_relation_based_routes.py -q` 통과.
+
+### Follow-up
+- Remove now-obsolete FE request arguments that manually pass receiver or family user identifiers.
+- Decide whether past `scheduled_at` should be auto-sent or rejected with validation in the final product policy.
+
+## 2026-05-24
+
+### Author
+- `kangtaeyeong`
+
+### Changes
+- Expanded temporary persistence from family-link only to broad Supabase metadata persistence.
+- Added Supabase-backed storage for:
+  - `user_profiles`
+  - `family_invites`
+  - `family_links`
+  - `answers`
+  - `photos`
+  - `photo_reactions`
+  - `dementia_analyses`
+  - `device_tokens`
+  - `notifications`
+- Added `app/services/user_profile_service.py` to sync Cognito sign-up / token claims into Supabase profiles.
+- Updated `auth_service` so sign-up confirmation and protected-route access keep Supabase user profiles synchronized.
+- Reworked question/photo/dementia/notification services to use Supabase with in-memory fallback for tests.
+- Expanded `docs/supabase-family-schema.sql` into a full app metadata schema setup file.
+- Updated `.env.example`, `README.md`, and `AGENTS.md` with the new Supabase scope and setup instructions.
+
+### Verified
+- `UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py test/test_relation_based_routes.py -q` 통과.
+
+### Follow-up
+- Execute `docs/supabase-family-schema.sql` in Supabase SQL Editor before runtime verification.
+- Connect FE family screens to the live family APIs.
+- Replace Supabase temporary persistence with DynamoDB if the final architecture is fixed on AWS-only infrastructure.
+
+---
+
+## 2026-05-24
+
+### Author
+- `kangtaeyeong`
+
+### Changes
+- Added Supabase REST integration support for family invite and family link persistence.
+- Added `app/services/supabase_service.py` for backend-only Supabase API access using the service role key.
+- Reworked `app/services/family_service.py` to support Supabase-backed family persistence with in-memory fallback for tests.
+- Added `docs/supabase-family-schema.sql` for `family_invites` and `family_links` table creation.
+- Updated `GET /answers/{type}` so child users read answers from their linked parent.
+- Updated `GET /dementia` and `GET /dementia/{analysis_id}` so child users read analyses from their linked parent.
+- Updated `POST /photos` so parent/child users always send to their linked family member instead of trusting the client-provided receiver id.
+- Added `test/test_relation_based_routes.py` to verify linked-parent answer lookup, dementia lookup, and relation-based photo delivery.
+- Updated `README.md` and `.env.example` with Supabase setup guidance.
+
+### Verified
+- `UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py test/test_relation_based_routes.py -q` 통과.
+
+### Follow-up
+- Connect FE family screens to `/family/invites`, `/family/connect`, and `/family/me`.
+- Replace in-memory answer/photo/dementia metadata with real persistence after family-link flow stabilizes.
+
+---
+
 ## 2026-05-24
 
 ### Author

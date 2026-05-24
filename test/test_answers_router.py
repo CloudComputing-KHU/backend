@@ -9,7 +9,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.main import app
 from app.services.auth_service import get_current_user
-from app.services.question_service import mock_answers
+from app.services.question_service import InMemoryQuestionBackend, mock_answers, question_service
 from app.services.storage_service import storage_service
 
 MOCK_USER = {"sub": "parent_001", "email": "test@test.com", "custom:role": "parent"}
@@ -20,6 +20,7 @@ client = TestClient(app)
 
 
 def setup_function() -> None:
+    question_service.set_backend(InMemoryQuestionBackend())
     mock_answers.clear()
     storage_service.upload_voice = lambda user_id, stored_filename, contents, content_type: (
         f"s3://mock-bucket/voices/{user_id}/{stored_filename}"

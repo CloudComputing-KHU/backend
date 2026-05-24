@@ -9,29 +9,14 @@ from app.schemas.family import (
     FamilyMeResponse,
 )
 from app.services.auth_service import get_current_user
-from app.services.family_service import family_service
+from app.services.family_service import family_service, get_role_from_claims
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _normalize_role(raw_role: str | None) -> str | None:
-    if not raw_role:
-        return None
-    role = raw_role.lower()
-    if role in {"child", "children"}:
-        return "child"
-    if role in {"parent", "guardian"}:
-        return "parent"
-    return None
-
-
 def _require_role(current_user: dict, expected_role: str) -> str:
-    role = _normalize_role(
-        current_user.get("custom:role")
-        or current_user.get("role")
-        or current_user.get("app_role")
-    )
+    role = get_role_from_claims(current_user)
     if role != expected_role:
         raise HTTPException(
             status_code=403,
@@ -86,10 +71,6 @@ def connect_family(
 @router.get("/me", response_model=FamilyMeResponse)
 def get_my_family(current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
-    role = _normalize_role(
-        current_user.get("custom:role")
-        or current_user.get("role")
-        or current_user.get("app_role")
-    )
+    role = get_role_from_claims(current_user)
     logger.info("가족 연결 상태 조회 - user_id=%s", user_id)
     return family_service.get_my_family(user_id=user_id, role=role)

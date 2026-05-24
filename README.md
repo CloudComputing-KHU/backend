@@ -25,7 +25,7 @@
 | S3 파일 업로드 (음성, 사진) | 완료 |
 | 사진 압축/리사이즈 | 완료 |
 | 치매 위험 분석 API + Lambda | 완료 |
-| DB 연동 (DynamoDB) | 미완료 — 현재 in-memory |
+| DB 연동 (최종 DynamoDB 예정) | 진행 중 — 현재 Supabase로 메타데이터 영속화 |
 | 수신 사진 조회 API | 완료 |
 | 예약 사진 전송 스케줄러 | 완료 |
 | Presigned URL (음성/사진 접근) | 완료 |
@@ -59,12 +59,14 @@ app/
   │   └── device.py           # 디바이스 토큰 등록 형식
   └── services/               # 실제 비즈니스 로직(DB 저장, 필터링, 정렬 등)을 수행
       ├── auth_service.py     # Cognito 인증 및 JWT 검증 로직
-      ├── family_service.py   # 부모-자녀 초대코드/연결 in-memory 로직
-      ├── question_service.py # 질문/답변 in-memory DB 로직
-      ├── photo_service.py    # 사진 업로드 및 조회 in-memory DB 로직
-      ├── dementia_service.py # 치매 위험 감지 파이프라인 (S3→Transcribe→Lambda/OpenAI)
+      ├── family_service.py   # 부모-자녀 초대코드/연결 로직 (Supabase / 테스트 fallback)
+      ├── question_service.py # 질문/답변 저장 로직 (Supabase / 테스트 fallback)
+      ├── photo_service.py    # 사진/반응 저장 로직 (Supabase / 테스트 fallback)
+      ├── dementia_service.py # 치매 분석 파이프라인 + 결과 저장 (Supabase / 테스트 fallback)
       ├── storage_service.py  # S3 파일 업로드 로직 (음성, 사진)
-      └── notification_service.py  # FCM 푸시 알림 발송 (Firebase Admin SDK)
+      ├── supabase_service.py # Supabase REST API 호출 로직
+      ├── user_profile_service.py # Cognito 회원정보 → Supabase 프로필 동기화
+      └── notification_service.py  # FCM 토큰/알림 저장 + 발송 로직
 lambda/
   └── dementia_analyzer/
       ├── handler.py          # Lambda 함수 (OpenAI GPT 치매 분석)
@@ -171,6 +173,40 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
   }
   ```
 
+#### Supabase 테이블 준비
+- 현재 백엔드는 로컬 메모리 대신 Supabase에 메타데이터를 저장합니다.
+- SQL Editor에서 `docs/supabase-family-schema.sql`을 먼저 실행해야 합니다.
+- 파일명은 `family`로 시작하지만, 실제로는 아래 전체 테이블을 생성합니다.
+  - `user_profiles`
+  - `family_invites`
+  - `family_links`
+  - `answers`
+  - `photos`
+  - `photo_reactions`
+  - `dementia_analyses`
+  - `device_tokens`
+  - `notifications`
+- 필요한 환경변수는 `.env.example:27`에 정리돼 있습니다.
+
+#### Supabase SQL Editor에서 실제로 할 일
+1. Supabase 프로젝트에 들어갑니다.
+2. 왼쪽 메뉴에서 `SQL Editor`를 엽니다.
+3. `New query`를 누릅니다.
+4. `backend/docs/supabase-family-schema.sql` 파일 내용을 전체 복사해서 붙여넣습니다.
+5. `Run`을 눌러 실행합니다.
+6. 실행 후 `Table Editor`에서 아래 테이블들이 생성됐는지 확인합니다.
+   - `user_profiles`
+   - `family_invites`
+   - `family_links`
+   - `answers`
+   - `photos`
+   - `photo_reactions`
+   - `dementia_analyses`
+   - `device_tokens`
+   - `notifications`
+
+이 작업을 해야 백엔드가 Supabase에 데이터를 저장할 수 있습니다. 이걸 하지 않으면 API는 테이블 없음 오류로 실패합니다.
+
 ---
 
 > **인증 필요**: 아래 모든 API는 로그인 후 발급받은 `id_token`을 헤더에 포함해야 합니다.
@@ -190,13 +226,17 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **POST** `/answers/{type}`
 - **설명**: 부모님이 선택하신 선택형 답변을 저장합니다. (저장 시 현재 시간 `created_at`이 자동 추가됩니다)
 - **파라미터**: `type` 경로 파라미터
-- **요청 Body**: `question_id`(질문 ID), `answer`(선택/입력한 텍스트), `receiver_user_id`(알림 받을 상대방 ID, 선택)
+- **요청 Body**: `question_id`(질문 ID), `answer`(선택/입력한 텍스트)
 
 ### 3. 부모님 답변 목록 조회 (자녀용)
 - **GET** `/answers/{type}`
-- **설명**: 자녀가 부모님의 상태를 확인할 수 있도록, 특정 부모가 남긴 답변들을 최신 시간순으로 정렬하여 보여줍니다.
+- **설명**: 자녀가 부모님의 상태를 확인할 수 있도록, 연결된 부모가 남긴 답변들을 최신 시간순으로 정렬하여 보여줍니다.
 - **파라미터**: `type` 경로 파라미터
-- **특징**: 음성 답변의 경우 `voice_status`와 함께 바로 재생 가능한 `voice_url` (Presigned URL, 7일 유효)도 함께 반환합니다.
+- **특징**:
+  - 부모가 호출하면 본인 답변을 조회합니다.
+  - 자녀가 호출하면 연결된 부모의 답변을 조회합니다.
+  - 가족 연결이 없으면 `409`를 반환합니다.
+  - 음성 답변의 경우 `voice_status`와 함께 바로 재생 가능한 `voice_url` (Presigned URL, 7일 유효)도 함께 반환합니다.
 
 ### 4. 음성 답변 업로드
 - **POST** `/answers/{type}/voice`
@@ -212,8 +252,11 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 ### 5. 사진 전송 (즉시/예약)
 - **POST** `/photos`
 - **설명**: 서로의 일상 사진을 전송하거나 특정 시간에 전송되도록 예약합니다.
-- **요청 Form**: `receiver_user_id`, `file`, `caption`(선택), `scheduled_at`(선택) (Multipart/form-data)
+- **요청 Form**: `file`, `caption`(선택), `scheduled_at`(선택) (Multipart/form-data)
 - **특징**:
+  - 서버가 토큰의 현재 사용자와 가족 연결 정보를 기준으로 수신자를 자동 결정합니다.
+  - 즉, 자녀는 연결된 부모에게, 부모는 연결된 자녀에게 전송됩니다.
+  - 가족 연결이 없으면 `409`를 반환합니다.
   - `scheduled_at` 파라미터가 제공될 경우 `scheduled` 상태로 저장되며, 서버 내 asyncio 스케줄러가 해당 시간에 자동 발송 처리합니다.
   - 응답에 바로 열람 가능한 `presigned_url` (Presigned URL, 7일 유효)이 포함됩니다.
 
@@ -250,7 +293,11 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **GET** `/dementia/{analysis_id}`
 - **설명**: 특정 분석 건의 상세 결과를 조회합니다.
 - **파라미터**: `analysis_id` 경로 파라미터
-- **특징**: 분석 진행 중이면 현재 `status`를, 완료 시 `risk_level`, `risk_score`, `analysis_summary`, `indicators`를 포함한 전체 결과를 반환합니다.
+- **특징**:
+  - 부모는 본인 분석 결과를 조회합니다.
+  - 자녀는 연결된 부모의 분석 결과만 조회할 수 있습니다.
+  - 권한이 없으면 `403`을 반환합니다.
+  - 분석 진행 중이면 현재 `status`를, 완료 시 `risk_level`, `risk_score`, `analysis_summary`, `indicators`를 포함한 전체 결과를 반환합니다.
 - **응답 예시** (완료 시):
   ```json
   {
@@ -270,7 +317,9 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 
 ### 10. 사용자별 치매 분석 이력 조회
 - **GET** `/dementia`
-- **설명**: 본인의 치매 분석 이력을 최신순으로 조회합니다.
+- **설명**:
+  - 부모는 본인 치매 분석 이력을 조회합니다.
+  - 자녀는 연결된 부모의 치매 분석 이력을 조회합니다.
 
 ### 11. FCM 디바이스 토큰 등록
 - **POST** `/devices/register`
@@ -326,6 +375,9 @@ Firebase Cloud Messaging(FCM)을 통해 Android/iOS 모두 지원합니다.
 - `.env.example` 추가
 - 음성 업로드 S3 실연동
 - 사진 업로드 S3 실연동
+- Supabase 기반 메타데이터 영속화 추가
+- Cognito 회원가입 시 Supabase `user_profiles` 동기화 추가
+- 가족 연결/답변/사진/치매 분석/디바이스 토큰/알림 저장을 Supabase로 전환
 - AWS CLI와 `boto3` 기반 S3 적재 확인 절차 추가
 - 중복 가상환경 `venv/` 제거, `.venv/`만 유지
 - 변경 이력 문서 `CHANGELOG.md` 추가
@@ -377,9 +429,10 @@ uv run python scripts/benchmark_photo.py photo1.jpg photo2.png
 
 ## 참고 및 확장 가이드
 
-- **Mock 데이터 사용**: 답변/사진 메타데이터는 현재 DB 연결 없이 메모리 상주 리스트를 사용합니다. 서버 재시작 시 메타데이터는 초기화됩니다.
+- **Supabase 저장 사용**: 질문은 코드에 정적 보관하지만, 회원 프로필/가족 연결/답변/사진/사진 반응/치매 분석/디바이스 토큰/알림은 Supabase에 저장합니다.
 - **S3 업로드 적용**: 음성 업로드와 사진 업로드 파일 본문은 현재 실제 AWS S3에 저장됩니다.
-- **TODO 주석 활용**: 향후 기능 확장이 필요한 구간(DynamoDB, AWS S3, 스케줄러 연동 등)은 모두 코드 내부에 `# TODO:` 주석으로 표기해 두었습니다.
+- **테스트 fallback 유지**: pytest에서는 외부 네트워크 없이 검증할 수 있도록 in-memory fallback backend를 유지합니다.
+- **TODO 주석 활용**: 최종 목표는 DynamoDB 전환이며, 확장이 필요한 구간은 코드 내부 `# TODO:`로 유지합니다.
 
 ## 로컬 실행 방법
 
@@ -405,6 +458,20 @@ S3_BUCKET_NAME=cloud-compute-team-e
 S3_VOICE_PREFIX=voices
 S3_PHOTO_PREFIX=photos
 S3_URL_MODE=s3_uri
+
+# Supabase
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+SUPABASE_SCHEMA=public
+SUPABASE_USER_PROFILES_TABLE=user_profiles
+SUPABASE_FAMILY_INVITES_TABLE=family_invites
+SUPABASE_FAMILY_LINKS_TABLE=family_links
+SUPABASE_ANSWERS_TABLE=answers
+SUPABASE_PHOTOS_TABLE=photos
+SUPABASE_PHOTO_REACTIONS_TABLE=photo_reactions
+SUPABASE_DEMENTIA_ANALYSES_TABLE=dementia_analyses
+SUPABASE_DEVICE_TOKENS_TABLE=device_tokens
+SUPABASE_NOTIFICATIONS_TABLE=notifications
 
 # 푸시 알림 (둘 중 하나)
 FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/serviceAccountKey.json
@@ -454,7 +521,7 @@ uv run poe test-voice
 ### 1. 자동 테스트 실행
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py -q
+UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py test/test_relation_based_routes.py -q
 ```
 
 - `test/test_family_router.py`
@@ -464,6 +531,11 @@ UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answer
 - `test/test_answers_router.py`
   - 음성 업로드 정상 처리
   - 잘못된 확장자 거부
+- `test/test_relation_based_routes.py`
+  - 자녀가 연결된 부모 답변 조회
+  - 자녀가 연결된 부모 치매 분석 조회
+  - 사진 전송 시 연결된 상대방으로 수신자 보정
+  - 가족 연결 없을 때 `409` 반환
 
 현재 구현 기준 위 명령은 통과했습니다.
 
