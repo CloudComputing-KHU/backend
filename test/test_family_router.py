@@ -9,7 +9,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.main import app
 from app.services.auth_service import get_current_user
-from app.services.family_service import mock_family_invites, mock_family_links
+from app.services.family_service import InMemoryFamilyBackend, family_service, mock_family_invites, mock_family_links
 
 client = TestClient(app)
 
@@ -28,6 +28,7 @@ PARENT_USER = {
 def setup_function() -> None:
     mock_family_invites.clear()
     mock_family_links.clear()
+    family_service.set_backend(InMemoryFamilyBackend())
     app.dependency_overrides.clear()
 
 

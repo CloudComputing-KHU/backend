@@ -12,14 +12,14 @@ import urllib.request
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
-
-load_dotenv()
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
 import jwt
 from jwt.algorithms import RSAAlgorithm
 
+from app.services.user_profile_service import user_profile_service
+
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
@@ -46,8 +46,6 @@ class AuthService:
     def _app_client_id(self) -> str:
         return os.getenv("COGNITO_APP_CLIENT_ID", "")
 
-    # ── 회원가입 ──
-
     def sign_up(self, role: str, name: str, email: str, password: str) -> dict:
         try:
             resp = self._get_client().sign_up(
@@ -60,11 +58,9 @@ class AuthService:
                     {"Name": "custom:role", "Value": role},
                 ],
             )
-            return {"user_sub": resp["UserSub"]}
         except ClientError as e:
             code = e.response["Error"]["Code"]
             if code == "UsernameExistsException":
-                # 인증 미완료(UNCONFIRMED) 상태면 새 인증 코드를 재발송
                 try:
                     self._get_client().resend_confirmation_code(
                         ClientId=self._app_client_id,
@@ -78,7 +74,14 @@ class AuthService:
                 raise HTTPException(status_code=400, detail="비밀번호가 요구사항을 충족하지 않습니다.")
             raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
 
-    # ── 이메일 인증 ──
+        user_profile_service.upsert_profile(
+            user_id=resp["UserSub"],
+            email=email,
+            name=name,
+            role=role,
+            is_confirmed=False,
+        )
+        return {"user_sub": resp["UserSub"]}
 
     def confirm_sign_up(self, email: str, confirmation_code: str) -> None:
         try:
@@ -94,8 +97,7 @@ class AuthService:
             if code == "ExpiredCodeException":
                 raise HTTPException(status_code=400, detail="인증 코드가 만료됐습니다.")
             raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
-
-    # ── 로그인 ──
+        user_profile_service.mark_confirmed_by_email(email)
 
     def login(self, email: str, password: str) -> dict:
         try:
@@ -119,8 +121,6 @@ class AuthService:
                 raise HTTPException(status_code=403, detail="이메일 인증이 완료되지 않았습니다.")
             raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
 
-    # ── 토큰 갱신 ──
-
     def refresh(self, refresh_token: str) -> dict:
         try:
             resp = self._get_client().initiate_auth(
@@ -134,10 +134,8 @@ class AuthService:
                 "id_token": result["IdToken"],
                 "expires_in": result["ExpiresIn"],
             }
-        except ClientError as e:
+        except ClientError:
             raise HTTPException(status_code=401, detail="토큰 갱신에 실패했습니다.")
-
-    # ── JWT 검증 ──
 
     def _region_from_pool_id(self) -> str:
         return self._user_pool_id.rsplit("_", 1)[0]
@@ -199,5 +197,9 @@ auth_service = AuthService()
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
-    """Authorization: Bearer <id_token> 헤더에서 사용자 정보를 추출하는 의존성."""
-    return auth_service.verify_token(credentials.credentials)
+    payload = auth_service.verify_token(credentials.credentials)
+    try:
+        user_profile_service.sync_from_claims(payload)
+    except Exception:
+        logger.exception("사용자 프로필 Supabase 동기화 실패")
+    return payload

@@ -5,15 +5,115 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.services.supabase_service import supabase_service
+
 logger = logging.getLogger(__name__)
 
 _device_tokens: dict[str, str] = {}
 _notifications: dict[str, list[dict]] = {}
 
 
+class InMemoryNotificationBackend:
+    @staticmethod
+    def register_token(user_id: str, fcm_token: str) -> None:
+        _device_tokens[user_id] = fcm_token
+
+    @staticmethod
+    def get_token(user_id: str) -> Optional[str]:
+        return _device_tokens.get(user_id)
+
+    @staticmethod
+    def save_notification(user_id: str, title: str, body: str, data: Optional[dict]) -> dict:
+        record = {
+            "notification_id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "title": title,
+            "body": body,
+            "data": data,
+            "is_read": False,
+            "created_at": datetime.now(timezone.utc),
+        }
+        _notifications.setdefault(user_id, []).insert(0, record)
+        return record
+
+    @staticmethod
+    def get_notifications(user_id: str) -> list[dict]:
+        return _notifications.get(user_id, [])
+
+
+class SupabaseNotificationBackend:
+    @property
+    def device_tokens_table(self) -> str:
+        return os.getenv("SUPABASE_DEVICE_TOKENS_TABLE", "device_tokens")
+
+    @property
+    def notifications_table(self) -> str:
+        return os.getenv("SUPABASE_NOTIFICATIONS_TABLE", "notifications")
+
+    @staticmethod
+    def is_configured() -> bool:
+        return supabase_service.is_configured()
+
+    def register_token(self, user_id: str, fcm_token: str) -> None:
+        supabase_service.upsert(
+            self.device_tokens_table,
+            {
+                "user_id": user_id,
+                "fcm_token": fcm_token,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="user_id",
+        )
+
+    def get_token(self, user_id: str) -> Optional[str]:
+        rows = supabase_service.select(
+            self.device_tokens_table,
+            filters=[("user_id", f"eq.{user_id}")],
+            limit=1,
+        )
+        if not rows:
+            return None
+        return rows[0].get("fcm_token")
+
+    def save_notification(self, user_id: str, title: str, body: str, data: Optional[dict]) -> dict:
+        record = {
+            "notification_id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "title": title,
+            "body": body,
+            "data": data,
+            "is_read": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return supabase_service.insert(self.notifications_table, record)[0]
+
+    def get_notifications(self, user_id: str) -> list[dict]:
+        return supabase_service.select(
+            self.notifications_table,
+            filters=[("user_id", f"eq.{user_id}")],
+            order="created_at.desc",
+        )
+
+
 class NotificationService:
     def __init__(self) -> None:
         self._app = None
+        self._memory_backend = InMemoryNotificationBackend()
+        self._supabase_backend = SupabaseNotificationBackend()
+        self._backend_override = None
+
+    def set_backend(self, backend) -> None:
+        self._backend_override = backend
+
+    def reset_backend(self) -> None:
+        self._backend_override = None
+
+    def _backend(self):
+        if self._backend_override is not None:
+            return self._backend_override
+        if self._supabase_backend.is_configured():
+            return self._supabase_backend
+        return self._memory_backend
 
     def _get_app(self):
         import firebase_admin
@@ -39,29 +139,20 @@ class NotificationService:
         return self._app
 
     def register_token(self, user_id: str, fcm_token: str) -> None:
-        _device_tokens[user_id] = fcm_token
+        self._backend().register_token(user_id, fcm_token)
         logger.info("FCM 토큰 등록 - user_id=%s", user_id)
 
     def get_token(self, user_id: str) -> Optional[str]:
-        return _device_tokens.get(user_id)
+        return self._backend().get_token(user_id)
 
-    def _save_notification(self, user_id: str, title: str, body: str, data: Optional[dict]) -> None:
-        record = {
-            "notification_id": uuid.uuid4().hex,
-            "title": title,
-            "body": body,
-            "data": data,
-            "is_read": False,
-            "created_at": datetime.now(timezone.utc),
-        }
-        _notifications.setdefault(user_id, []).insert(0, record)
+    def _save_notification(self, user_id: str, title: str, body: str, data: Optional[dict]) -> dict:
+        return self._backend().save_notification(user_id, title, body, data)
 
     def get_notifications(self, user_id: str) -> list[dict]:
-        return _notifications.get(user_id, [])
+        return self._backend().get_notifications(user_id)
 
     def send(self, user_id: str, title: str, body: str, data: Optional[dict] = None) -> bool:
         self._save_notification(user_id, title, body, data)
-
         token = self.get_token(user_id)
         if not token:
             logger.warning("FCM 토큰 없음 - user_id=%s, 알림 건너뜀", user_id)

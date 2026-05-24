@@ -28,10 +28,12 @@
   - schemas in `app/schemas/`
   - business logic in `app/services/`
 - Current implementation is a mock/prototype, not production persistence:
-  - question/answer data is stored in in-memory Python lists,
+  - static questions remain in code,
+  - user profiles, family links, answers, photos, photo reactions, dementia analyses, device tokens, and notifications are now stored in Supabase when configured,
   - photo and voice files are uploaded to real S3 when `.env` is configured,
-  - voice analysis is simulated with a background async task,
-  - no real DB, scheduler, STT, Bedrock, or Rekognition integration is complete yet.
+  - pytest still uses in-memory fallback backends to avoid external network dependency,
+  - voice analysis still runs as a FastAPI background task,
+  - final DynamoDB migration is still not complete.
 
 ## Product Assumptions To Preserve
 - Preserve the parent-child asymmetric workflow:
@@ -83,8 +85,21 @@
 ## AWS Integration Context
 - Recommended rollout order:
   - S3 is already connected for voice and photo uploads,
-  - keep metadata in mock/in-memory storage temporarily,
+  - Supabase is the current temporary metadata store for collaboration and shared testing,
   - add DynamoDB after retrieval/statistics requirements stabilize.
+- Current Supabase persistence scope:
+  - `user_profiles`
+  - `family_invites`
+  - `family_links`
+  - `answers`
+  - `photos`
+  - `photo_reactions`
+  - `dementia_analyses`
+  - `device_tokens`
+  - `notifications`
+- Supabase setup reference:
+  - schema SQL file: `docs/supabase-family-schema.sql`
+  - env vars in `.env.example`
 - Expected environment variables for S3 integration:
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
@@ -92,6 +107,10 @@
   - `S3_BUCKET_NAME`
   - `S3_VOICE_PREFIX`
   - `S3_PHOTO_PREFIX`
+- Expected environment variables for Supabase integration:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `SUPABASE_SCHEMA`
 - Default assumption unless the user says otherwise:
   - `DATA_AWS_REGION=ap-northeast-2`
   - `AUTH_AWS_REGION=us-east-1`

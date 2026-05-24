@@ -12,6 +12,7 @@ from app.schemas.answer import (
     VoiceUploadResponse,
 )
 from app.services.auth_service import get_current_user
+from app.services.family_service import family_service, get_role_from_claims
 from app.services.notification_service import notification_service
 from app.services.question_service import question_service
 from app.services.storage_service import storage_service
@@ -57,11 +58,25 @@ def _prepare_audio_upload(file: UploadFile, contents: bytes) -> tuple[str, int, 
     return stored_filename, file_size, content_type
 
 
+def _resolve_answer_owner_user_id(current_user: dict) -> str:
+    user_id = current_user["sub"]
+    role = get_role_from_claims(current_user)
+    if role == "child":
+        return family_service.require_linked_user_id(user_id)
+    return user_id
+
+
 @router.get("/{type}", response_model=List[AnswerItem])
 def get_user_answers(type: QuestionType, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["sub"]
-    logger.info("답변 목록 조회 - type=%s, user_id=%s", type, user_id)
-    answers = question_service.get_user_answers(type, user_id)
+    caller_user_id = current_user["sub"]
+    answer_owner_user_id = _resolve_answer_owner_user_id(current_user)
+    logger.info(
+        "답변 목록 조회 - type=%s, caller_user_id=%s, answer_owner_user_id=%s",
+        type,
+        caller_user_id,
+        answer_owner_user_id,
+    )
+    answers = question_service.get_user_answers(type, answer_owner_user_id)
     for ans in answers:
         if ans.get("voice_file_key"):
             ans["voice_url"] = storage_service.generate_presigned_url(ans["voice_file_key"])
@@ -72,9 +87,10 @@ def submit_answer(type: QuestionType, request: AnswerRequest, current_user: dict
     user_id = current_user["sub"]
     logger.info("텍스트 답변 저장 - type=%s, user_id=%s", type, user_id)
     question_service.save_answer(type, request, user_id)
-    if request.receiver_user_id:
+    receiver_user_id = family_service.get_linked_user_id(user_id)
+    if receiver_user_id:
         notification_service.send(
-            user_id=request.receiver_user_id,
+            user_id=receiver_user_id,
             title="새 답변이 도착했어요",
             body="가족이 오늘의 질문에 답했어요.",
             data={"type": "answer_received", "question_type": type},

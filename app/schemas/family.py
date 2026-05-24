@@ -43,6 +43,8 @@ class FamilyLinkItem(BaseModel):
     link_id: str
     parent_user_id: str
     child_user_id: str
+    parent_name: Optional[str] = None
+    child_name: Optional[str] = None
     status: LinkStatus
     connected_at: datetime
 

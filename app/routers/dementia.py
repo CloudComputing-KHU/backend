@@ -18,21 +18,29 @@ from app.schemas.dementia import (
 )
 from app.services.auth_service import get_current_user
 from app.services.dementia_service import dementia_service
-from app.services.question_service import mock_answers
+from app.services.family_service import family_service, get_role_from_claims
+from app.services.question_service import question_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 def _find_answer(answer_id: str, user_id: str) -> dict:
-    """in-memory 답변 목록에서 해당 음성 답변을 찾는다."""
-    for ans in mock_answers:
-        if ans["answer_id"] == answer_id and ans["user_id"] == user_id:
-            return ans
+    answer = question_service.get_answer_by_id(answer_id)
+    if answer and answer["user_id"] == user_id:
+        return answer
     raise HTTPException(
         status_code=404,
         detail=f"answer_id={answer_id}에 해당하는 음성 답변을 찾을 수 없습니다.",
     )
+
+
+def _resolve_analysis_owner_user_id(current_user: dict) -> str:
+    user_id = current_user["sub"]
+    role = get_role_from_claims(current_user)
+    if role == "child":
+        return family_service.require_linked_user_id(user_id)
+    return user_id
 
 
 @router.post("/analyze", response_model=DementiaAnalysisResponse)
@@ -89,9 +97,17 @@ async def request_dementia_analysis(
 
 
 @router.get("/{analysis_id}", response_model=DementiaAnalysisResult)
-def get_dementia_analysis(analysis_id: str):
+def get_dementia_analysis(
+    analysis_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     """분석 결과 단건 조회 — 진행 중이면 현재 status를, 완료 시 전체 결과를 반환합니다."""
-    logger.info("치매 분석 결과 조회 - analysis_id=%s", analysis_id)
+    analysis_owner_user_id = _resolve_analysis_owner_user_id(current_user)
+    logger.info(
+        "치매 분석 결과 조회 - analysis_id=%s, analysis_owner_user_id=%s",
+        analysis_id,
+        analysis_owner_user_id,
+    )
 
     record = dementia_service.get_analysis(analysis_id)
     if not record:
@@ -99,12 +115,19 @@ def get_dementia_analysis(analysis_id: str):
             status_code=404,
             detail=f"analysis_id={analysis_id}에 해당하는 분석을 찾을 수 없습니다.",
         )
+    if record["user_id"] != analysis_owner_user_id:
+        raise HTTPException(status_code=403, detail="해당 분석 결과를 조회할 권한이 없습니다.")
 
     return DementiaAnalysisResult(**record)
 
 
 @router.get("", response_model=List[DementiaAnalysisItem])
 def get_user_analyses(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["sub"]
-    logger.info("치매 분석 이력 조회 - user_id=%s", user_id)
-    return dementia_service.get_user_analyses(user_id)
+    caller_user_id = current_user["sub"]
+    analysis_owner_user_id = _resolve_analysis_owner_user_id(current_user)
+    logger.info(
+        "치매 분석 이력 조회 - caller_user_id=%s, analysis_owner_user_id=%s",
+        caller_user_id,
+        analysis_owner_user_id,
+    )
+    return dementia_service.get_user_analyses(analysis_owner_user_id)
