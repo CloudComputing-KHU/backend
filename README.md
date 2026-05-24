@@ -32,6 +32,7 @@
 | STT 파이프라인 (Transcribe) | 코드 완성 — Lambda 배포 필요 |
 | FCM 푸시 알림 | 완료 — Firebase 서비스 계정 설정 필요 |
 | 회원가입 / 로그인 (Cognito) | 완료 |
+| 부모-자녀 초대코드 연결 | 완료 |
 
 ---
 
@@ -42,6 +43,7 @@ app/
   ├── main.py                 
   ├── routers/                # API의 URL 경로와 요청/응답을 처리 역할
   │   ├── auth.py             # 회원가입, 이메일 인증, 로그인, 토큰 갱신 API
+  │   ├── family.py           # 부모-자녀 초대코드 생성/연결 API
   │   ├── questions.py        # 질문 데이터 제공 관련 API
   │   ├── answers.py          # 답변 데이터 저장/조회 관련 API
   │   ├── photos.py           # 사진 전송 및 조회 관련 API
@@ -49,6 +51,7 @@ app/
   │   └── devices.py          # FCM 디바이스 토큰 등록 API
   ├── schemas/                # 클라이언트와 주고받을 데이터 스키마 정의 (데이터 검증 역할)
   │   ├── auth.py             # 인증 요청/응답 데이터 형식
+  │   ├── family.py           # 가족 연결 요청/응답 데이터 형식
   │   ├── question.py         # 질문 데이터 형식
   │   ├── answer.py           # 답변 데이터 형식
   │   ├── photo.py            # 사진 데이터 형식
@@ -56,6 +59,7 @@ app/
   │   └── device.py           # 디바이스 토큰 등록 형식
   └── services/               # 실제 비즈니스 로직(DB 저장, 필터링, 정렬 등)을 수행
       ├── auth_service.py     # Cognito 인증 및 JWT 검증 로직
+      ├── family_service.py   # 부모-자녀 초대코드/연결 in-memory 로직
       ├── question_service.py # 질문/답변 in-memory DB 로직
       ├── photo_service.py    # 사진 업로드 및 조회 in-memory DB 로직
       ├── dementia_service.py # 치매 위험 감지 파이프라인 (S3→Transcribe→Lambda/OpenAI)
@@ -71,7 +75,8 @@ scripts/
   ├── test_lambda_integration.py   # Lambda 연동 테스트
   └── benchmark_photo.py           # 사진 압축 벤치마크
 test/
-  └── test_answers_router.py  # 음성 업로드 API 테스트
+  ├── test_answers_router.py  # 음성 업로드 API 테스트
+  └── test_family_router.py   # 가족 연결 API 테스트
 pyproject.toml                # uv / poe / dependency 설정
 CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 ```
@@ -101,6 +106,70 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **POST** `/auth/refresh`
 - **요청 Body**: `refresh_token`
 - **응답**: `access_token`, `id_token`, `expires_in`
+
+#### 5. 가족 연결 초대 코드 생성 (자녀용)
+- **POST** `/family/invites`
+- **설명**: 자녀 계정이 부모님 연결용 4자리 숫자 초대 코드를 생성합니다.
+- **인증/권한**: 로그인 필요, `child` 역할만 호출 가능
+- **특징**:
+  - 코드 길이는 4자리 숫자입니다.
+  - 같은 자녀에게 아직 만료되지 않은 대기 코드가 있으면 그 코드를 재사용합니다.
+  - 기본 만료 시간은 생성 후 10분입니다.
+- **응답 예시**:
+  ```json
+  {
+    "message": "가족 연결 초대 코드가 준비됐습니다.",
+    "invite_code": "4821",
+    "child_user_id": "child_001",
+    "status": "pending",
+    "created_at": "2026-05-23T20:10:00",
+    "expires_at": "2026-05-23T20:20:00"
+  }
+  ```
+
+#### 6. 가족 연결 코드 입력 (부모용)
+- **POST** `/family/connect`
+- **설명**: 부모 계정이 자녀가 생성한 4자리 숫자 초대 코드를 입력해 가족 연결을 완료합니다.
+- **인증/권한**: 로그인 필요, `parent` 역할만 호출 가능
+- **요청 Body**:
+  ```json
+  {
+    "invite_code": "4821"
+  }
+  ```
+- **응답 예시**:
+  ```json
+  {
+    "message": "가족 연결이 완료됐습니다.",
+    "link_id": "link_a1b2c3d4",
+    "parent_user_id": "parent_001",
+    "child_user_id": "child_001",
+    "status": "active",
+    "connected_at": "2026-05-23T20:11:00"
+  }
+  ```
+
+#### 7. 내 가족 연결 상태 조회
+- **GET** `/family/me`
+- **설명**: 현재 로그인한 사용자의 가족 연결 상태를 조회합니다.
+- **응답 특징**:
+  - 연결 완료 전 자녀는 `pending_invite`로 현재 초대 코드를 확인할 수 있습니다.
+  - 연결 완료 후 `active_link`에 부모/자녀 관계가 표시됩니다.
+- **응답 예시**:
+  ```json
+  {
+    "user_id": "child_001",
+    "role": "child",
+    "active_link": {
+      "link_id": "link_a1b2c3d4",
+      "parent_user_id": "parent_001",
+      "child_user_id": "child_001",
+      "status": "active",
+      "connected_at": "2026-05-23T20:11:00"
+    },
+    "pending_invite": null
+  }
+  ```
 
 ---
 
@@ -374,6 +443,24 @@ uv run poe test-voice
 - 잘못된 확장자 거부
 
 를 검증합니다.
+
+## 가족 연결 API 검증 방법
+
+### 1. 자동 테스트 실행
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py -q
+```
+
+- `test/test_family_router.py`
+  - 자녀 초대 코드 생성
+  - 부모 코드 입력 연결
+  - 역할 제한 검증
+- `test/test_answers_router.py`
+  - 음성 업로드 정상 처리
+  - 잘못된 확장자 거부
+
+현재 구현 기준 위 명령은 통과했습니다.
 
 ### 3. Swagger UI로 수동 확인
 

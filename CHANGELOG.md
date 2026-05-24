@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## 2026-05-23
+
+### Author
+- `kangtaeyeong`
+
+### Changes
+- Added parent-child family linking APIs based on 4-digit invite codes.
+- Created `app/routers/family.py` with `POST /family/invites`, `POST /family/connect`, and `GET /family/me`.
+- Created `app/schemas/family.py` for invite/link request and response models.
+- Created `app/services/family_service.py` for in-memory invite issuance, expiration, and active link management.
+- Registered the family router in `app/main.py`.
+- Added `test/test_family_router.py` to verify invite creation, parent connection, and role restrictions.
+- Updated `README.md` to document the new family-linking flow and API examples.
+
+### Verified
+- Child users can create 4-digit invite codes.
+- Parent users can connect with a valid invite code.
+- Role restriction checks return 403 for invalid caller roles.
+- `UV_CACHE_DIR=.uv-cache uv run pytest test/test_family_router.py test/test_answers_router.py -q` 통과.
+
+### Follow-up
+- Persist family invites and links in DynamoDB instead of in-memory storage.
+- Replace hardcoded family-user assumptions in FE data providers with `/family/me` results.
+
+---
+
 ## 2026-05-02
 
 ### Author
