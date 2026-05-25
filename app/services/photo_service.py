@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from fastapi import HTTPException
+
 from app.schemas.photo import PhotoStatus
 from app.services.notification_service import notification_service
 from app.services.supabase_service import supabase_service
@@ -243,7 +245,12 @@ class PhotoService:
             return self._backend_override
         if self._supabase_backend.is_configured():
             return self._supabase_backend
-        return self._memory_backend
+        if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
+            return self._memory_backend
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase is not configured for photo persistence.",
+        )
 
     def save_photo(
         self,

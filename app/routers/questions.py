@@ -1,10 +1,17 @@
 import logging
-from fastapi import APIRouter, HTTPException
-from app.schemas.question import Question, QuestionType
+from fastapi import APIRouter, Depends, HTTPException
+from app.schemas.question import DailyQuestionProgress, Question, QuestionType
+from app.services.auth_service import get_current_user
 from app.services.question_service import question_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+@router.get("/status/today", response_model=DailyQuestionProgress)
+def get_today_question_status(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    logger.info("오늘의 질문 진행 상태 조회 - user_id=%s", user_id)
+    return question_service.get_daily_progress(user_id)
 
 @router.get("/{type}", response_model=Question)
 def get_question(type: QuestionType):

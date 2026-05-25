@@ -186,6 +186,9 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
   - `dementia_analyses`
   - `device_tokens`
   - `notifications`
+- 실행 환경에서는 `ALLOW_IN_MEMORY_FALLBACK=false`를 유지하세요.
+  - 이 값이 `false`면 Supabase 설정이 누락됐을 때 서버가 즉시 오류를 반환합니다.
+  - 조용히 in-memory로 떨어져서 서버 재시작 때 가족 연결/답변/사진 이력이 사라지는 문제를 막기 위한 설정입니다.
 - 필요한 환경변수는 `.env.example:27`에 정리돼 있습니다.
 
 #### Supabase SQL Editor에서 실제로 할 일
@@ -221,6 +224,19 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
 - **GET** `/questions/{type}`
 - **설명**: 부모님 화면에 띄울 질문과 선택지를 가져옵니다.
 - **파라미터**: `type` (health, meal, mood 중 하나를 넘겨줍니다)
+
+### 1-1. 오늘의 질문 진행 상태 조회
+- **GET** `/questions/status/today`
+- **설명**: 로그인한 부모 사용자의 오늘 질문 진행 상태를 영속 데이터 기준으로 조회합니다.
+- **반환값**:
+  - `health_answered`
+  - `meal_answered`
+  - `mood_answered`
+  - `completed_count`
+  - `next_type`
+  - `all_answered`
+- **용도**:
+  - FE가 앱 재시작 후에도 로컬 step 상태가 아니라 서버 저장 상태로 질문 진행 단계를 복원할 때 사용합니다.
 
 ### 2. 질문에 대한 선택형(텍스트) 답변 저장
 - **POST** `/answers/{type}`

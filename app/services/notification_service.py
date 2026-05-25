@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import HTTPException
+
 from app.services.supabase_service import supabase_service
 
 logger = logging.getLogger(__name__)
@@ -152,7 +154,12 @@ class NotificationService:
             return self._backend_override
         if self._supabase_backend.is_configured():
             return self._supabase_backend
-        return self._memory_backend
+        if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
+            return self._memory_backend
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase is not configured for notification persistence.",
+        )
 
     def _get_app(self):
         import firebase_admin

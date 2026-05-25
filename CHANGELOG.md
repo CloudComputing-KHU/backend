@@ -6,6 +6,8 @@
 - `kangtaeyeong`
 
 ### Changes
+- Added `GET /questions/status/today` for persistent daily question progress lookup.
+- Changed family/question/photo/dementia/notification services to stop silently falling back to in-memory storage unless `ALLOW_IN_MEMORY_FALLBACK=true` is explicitly enabled.
 - Added family-link response name enrichment so `GET /family/me` returns `parent_name` and `child_name`.
 - Normalized past/current `scheduled_at` values in photo upload so they are treated as immediate sends instead of delayed `scheduled` records.
 - Removed obsolete client input parameters from request contracts:
