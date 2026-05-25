@@ -121,6 +121,13 @@ def get_photo_history(current_user: dict = Depends(get_current_user)):
     return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]
 
 
+@router.get("/received/history", response_model=List[PhotoResponse])
+def get_received_photos_history(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    logger.info("수신 사진 전체 조회 - user_id=%s", user_id)
+    photos = photo_service.get_received_photos_history(user_id)
+    return [{**p, "presigned_url": storage_service.generate_presigned_url(p["image_url"])} for p in photos]
+
 @router.get("/received", response_model=List[PhotoResponse])
 def get_received_photos(current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]

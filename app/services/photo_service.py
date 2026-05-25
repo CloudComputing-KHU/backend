@@ -53,9 +53,14 @@ class InMemoryPhotoBackend:
 
     @staticmethod
     def get_received_photos(user_id: str) -> List[dict]:
-        filtered_photos = [
-            p for p in mock_photos if p["receiver_user_id"] == user_id and p["status"] == "sent"
-        ]
+        new_photos = [p for p in mock_photos if p["receiver_user_id"] == user_id and p["status"] == "sent"]
+        for p in new_photos:
+            p["status"] = "seen"
+        return sorted(new_photos, key=lambda x: x["created_at"], reverse=True)
+
+    @staticmethod
+    def get_received_photos_history(user_id: str) -> List[dict]:
+        filtered_photos = [p for p in mock_photos if p["receiver_user_id"] == user_id and p["status"] != "scheduled"]
         return sorted(filtered_photos, key=lambda x: x["created_at"], reverse=True)
 
     @staticmethod
@@ -143,9 +148,24 @@ class SupabasePhotoBackend:
         )
 
     def get_received_photos(self, user_id: str) -> List[dict]:
-        return supabase_service.select(
+        new_photos = supabase_service.select(
             self.photos_table,
             filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "eq.sent")],
+            order="created_at.desc",
+        )
+        for p in new_photos:
+            supabase_service.update(
+                self.photos_table,
+                filters=[("photo_id", f"eq.{p['photo_id']}")],
+                payload={"status": "seen"},
+            )
+            p["status"] = "seen"
+        return new_photos
+
+    def get_received_photos_history(self, user_id: str) -> List[dict]:
+        return supabase_service.select(
+            self.photos_table,
+            filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "neq.scheduled")],
             order="created_at.desc",
         )
 
@@ -234,6 +254,9 @@ class PhotoService:
 
     def get_received_photos(self, user_id: str) -> List[dict]:
         return self._backend().get_received_photos(user_id)
+
+    def get_received_photos_history(self, user_id: str) -> List[dict]:
+        return self._backend().get_received_photos_history(user_id)
 
     async def schedule_dispatch(self, photo_record: dict) -> None:
         scheduled_at = photo_record["scheduled_at"]

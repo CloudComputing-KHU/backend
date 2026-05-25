@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
 
-PhotoStatus = Literal["sent", "scheduled"]
+PhotoStatus = Literal["scheduled", "sent", "seen"]
 ReactionType = Literal["quick", "voice"]
 
 class PhotoResponse(BaseModel):
