@@ -153,13 +153,14 @@ class SupabasePhotoBackend:
             filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "eq.sent")],
             order="created_at.desc",
         )
-        for p in new_photos:
+        if new_photos:
             supabase_service.update(
                 self.photos_table,
-                filters=[("photo_id", f"eq.{p['photo_id']}")],
+                filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "eq.sent")],
                 payload={"status": "seen"},
             )
-            p["status"] = "seen"
+            for p in new_photos:
+                p["status"] = "seen"
         return new_photos
 
     def get_received_photos_history(self, user_id: str) -> List[dict]:

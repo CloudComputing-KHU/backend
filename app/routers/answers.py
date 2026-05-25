@@ -58,6 +58,15 @@ def _prepare_audio_upload(file: UploadFile, contents: bytes) -> tuple[str, int, 
     return stored_filename, file_size, content_type
 
 
+def _require_role(current_user: dict, expected_role: str) -> None:
+    role = get_role_from_claims(current_user)
+    if role != expected_role:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{expected_role} 역할 사용자만 사용할 수 있습니다.",
+        )
+
+
 def _resolve_answer_owner_user_id(current_user: dict) -> str:
     user_id = current_user["sub"]
     role = get_role_from_claims(current_user)
@@ -84,6 +93,7 @@ def get_user_answers(type: QuestionType, current_user: dict = Depends(get_curren
 
 @router.post("/{type}", response_model=AnswerResponse)
 def submit_answer(type: QuestionType, request: AnswerRequest, current_user: dict = Depends(get_current_user)):
+    _require_role(current_user, "parent")
     user_id = current_user["sub"]
     logger.info("텍스트 답변 저장 - type=%s, user_id=%s", type, user_id)
     question_service.save_answer(type, request, user_id)
@@ -104,6 +114,7 @@ async def submit_voice_answer(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
+    _require_role(current_user, "parent")
     user_id = current_user["sub"]
     logger.info("음성 답변 업로드 - type=%s, user_id=%s, filename=%s", type, user_id, file.filename)
 

@@ -40,6 +40,23 @@ class InMemoryNotificationBackend:
     def get_notifications(user_id: str) -> list[dict]:
         return _notifications.get(user_id, [])
 
+    @staticmethod
+    def get_unread_notifications(user_id: str) -> list[dict]:
+        return [n for n in _notifications.get(user_id, []) if not n["is_read"]]
+
+    @staticmethod
+    def mark_read(notification_id: str, user_id: str) -> bool:
+        for n in _notifications.get(user_id, []):
+            if n["notification_id"] == notification_id:
+                n["is_read"] = True
+                return True
+        return False
+
+    @staticmethod
+    def mark_all_read(user_id: str) -> None:
+        for n in _notifications.get(user_id, []):
+            n["is_read"] = True
+
 
 class SupabaseNotificationBackend:
     @property
@@ -92,6 +109,28 @@ class SupabaseNotificationBackend:
             self.notifications_table,
             filters=[("user_id", f"eq.{user_id}")],
             order="created_at.desc",
+        )
+
+    def get_unread_notifications(self, user_id: str) -> list[dict]:
+        return supabase_service.select(
+            self.notifications_table,
+            filters=[("user_id", f"eq.{user_id}"), ("is_read", "eq.false")],
+            order="created_at.desc",
+        )
+
+    def mark_read(self, notification_id: str, user_id: str) -> bool:
+        rows = supabase_service.update(
+            self.notifications_table,
+            filters=[("notification_id", f"eq.{notification_id}"), ("user_id", f"eq.{user_id}")],
+            payload={"is_read": True},
+        )
+        return len(rows) > 0
+
+    def mark_all_read(self, user_id: str) -> None:
+        supabase_service.update(
+            self.notifications_table,
+            filters=[("user_id", f"eq.{user_id}"), ("is_read", "eq.false")],
+            payload={"is_read": True},
         )
 
 
@@ -150,6 +189,15 @@ class NotificationService:
 
     def get_notifications(self, user_id: str) -> list[dict]:
         return self._backend().get_notifications(user_id)
+
+    def get_unread_notifications(self, user_id: str) -> list[dict]:
+        return self._backend().get_unread_notifications(user_id)
+
+    def mark_read(self, notification_id: str, user_id: str) -> bool:
+        return self._backend().mark_read(notification_id, user_id)
+
+    def mark_all_read(self, user_id: str) -> None:
+        self._backend().mark_all_read(user_id)
 
     def send(self, user_id: str, title: str, body: str, data: Optional[dict] = None) -> bool:
         self._save_notification(user_id, title, body, data)
