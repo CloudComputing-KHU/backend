@@ -33,7 +33,7 @@ class StorageService:
         self._client = None
 
     def _load_config(self) -> S3Config:
-        region = os.getenv("DATA_AWS_REGION")
+        region = os.getenv("DATA_AWS_REGION", os.getenv("AWS_REGION", "ap-northeast-2"))
         bucket_name = os.getenv("S3_BUCKET_NAME")
         voice_prefix = os.getenv("S3_VOICE_PREFIX")
         photo_prefix = os.getenv("S3_PHOTO_PREFIX")

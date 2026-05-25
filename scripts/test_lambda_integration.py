@@ -127,11 +127,9 @@ def test_2_fastapi_with_mocks():
         "여기가 어디지... 병원인가? 집인가?"
     )
 
-    original_start = dementia_service._start_transcription
-    original_wait = dementia_service._wait_for_transcription
+    original_speech_to_text = dementia_service._speech_to_text_whisper
 
-    dementia_service._start_transcription = lambda record, key: "mock-job-name"
-    dementia_service._wait_for_transcription = lambda job, record: sample_transcript
+    dementia_service._speech_to_text_whisper = lambda analysis_id, key: sample_transcript
 
     client = TestClient(app)
 
@@ -222,8 +220,7 @@ def test_2_fastapi_with_mocks():
 
     finally:
         storage_service.upload_voice = original_upload
-        dementia_service._start_transcription = original_start
-        dementia_service._wait_for_transcription = original_wait
+        dementia_service._speech_to_text_whisper = original_speech_to_text
 
 
 def main():

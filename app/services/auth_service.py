@@ -34,7 +34,7 @@ class AuthService:
         if self._client is None:
             self._client = boto3.client(
                 "cognito-idp",
-                region_name=os.getenv("AUTH_AWS_REGION", "us-east-1"),
+                region_name=os.getenv("AUTH_AWS_REGION", os.getenv("AWS_REGION", "us-east-1")),
             )
         return self._client
 
@@ -178,6 +178,7 @@ class AuthService:
                 algorithms=["RS256"],
                 issuer=issuer,
                 options={"verify_aud": False},
+                leeway=120,
             )
 
             token_use = payload.get("token_use")

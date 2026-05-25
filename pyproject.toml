@@ -8,8 +8,10 @@ dependencies = [
     "boto3>=1.39,<2.0",
     "fastapi>=0.115,<1.0",
     "firebase-admin>=6.0,<7.0",
+    "openai>=1.0,<2.0",
     "pillow>=11.0,<12.0",
     "pydantic>=2.0,<3.0",
+    "pyjwt[crypto]>=2.0,<3.0",
     "python-dotenv>=1.1,<2.0",
     "python-multipart>=0.0.20,<1.0",
     "uvicorn[standard]>=0.35,<1.0",
@@ -41,3 +43,7 @@ help = "Run a local voice upload smoke check"
 [tool.poe.tasks.benchmark-photo]
 cmd = "python scripts/benchmark_photo.py"
 help = "Run the photo compression benchmark"
+
+[tool.poe.tasks.test-e2e-dementia]
+cmd = "python scripts/test_e2e_dementia.py"
+help = "Run the dementia analysis E2E test (real AWS)"
