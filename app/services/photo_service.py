@@ -79,6 +79,10 @@ class InMemoryPhotoBackend:
         return photo
 
     @staticmethod
+    def get_scheduled_photos() -> List[dict]:
+        return [p for p in mock_photos if p["status"] == "scheduled"]
+
+    @staticmethod
     def get_reactions(photo_id: str) -> List[dict]:
         return [r for r in mock_reactions if r["photo_id"] == photo_id]
 
@@ -170,6 +174,13 @@ class SupabasePhotoBackend:
             order="created_at.desc",
         )
 
+    def get_scheduled_photos(self) -> List[dict]:
+        return supabase_service.select(
+            self.photos_table,
+            filters=[("status", "eq.scheduled")],
+            order="scheduled_at.asc",
+        )
+
     def get_photo(self, photo_id: str) -> dict | None:
         rows = supabase_service.select(
             self.photos_table,
@@ -258,6 +269,9 @@ class PhotoService:
 
     def get_received_photos_history(self, user_id: str) -> List[dict]:
         return self._backend().get_received_photos_history(user_id)
+
+    def get_scheduled_photos(self) -> List[dict]:
+        return self._backend().get_scheduled_photos()
 
     async def schedule_dispatch(self, photo_record: dict) -> None:
         scheduled_at = photo_record["scheduled_at"]

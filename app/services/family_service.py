@@ -34,6 +34,14 @@ def get_role_from_claims(current_user: dict) -> str | None:
     )
 
 
+def require_role(current_user: dict, expected_role: str) -> None:
+    if get_role_from_claims(current_user) != expected_role:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{expected_role} 역할 사용자만 사용할 수 있습니다.",
+        )
+
+
 class InMemoryFamilyBackend:
     @staticmethod
     def _expire_stale_invites() -> None:

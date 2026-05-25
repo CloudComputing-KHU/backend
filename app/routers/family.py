@@ -9,25 +9,15 @@ from app.schemas.family import (
     FamilyMeResponse,
 )
 from app.services.auth_service import get_current_user
-from app.services.family_service import family_service, get_role_from_claims
+from app.services.family_service import family_service, get_role_from_claims, require_role
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _require_role(current_user: dict, expected_role: str) -> str:
-    role = get_role_from_claims(current_user)
-    if role != expected_role:
-        raise HTTPException(
-            status_code=403,
-            detail=f"{expected_role} 역할 사용자만 사용할 수 있습니다.",
-        )
-    return role
-
-
 @router.post("/invites", response_model=FamilyInviteResponse)
 def create_family_invite(current_user: dict = Depends(get_current_user)):
-    _require_role(current_user, "child")
+    require_role(current_user, "child")
     child_user_id = current_user["sub"]
     logger.info("가족 초대 코드 생성 - child_user_id=%s", child_user_id)
 
@@ -48,7 +38,7 @@ def connect_family(
     request: FamilyConnectRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    _require_role(current_user, "parent")
+    require_role(current_user, "parent")
     parent_user_id = current_user["sub"]
     logger.info(
         "가족 연결 요청 - parent_user_id=%s, invite_code=%s",
