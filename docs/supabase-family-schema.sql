@@ -82,7 +82,7 @@ create table if not exists public.photos (
   image_url text not null,
   caption text,
   scheduled_at timestamptz,
-  status text not null check (status in ('sent', 'scheduled')),
+  status text not null check (status in ('sent', 'scheduled', 'seen')),
   created_at timestamptz not null default now()
 );
 
