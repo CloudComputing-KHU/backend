@@ -137,7 +137,12 @@ class DementiaService:
             return self._backend_override
         if self._supabase_backend.is_configured():
             return self._supabase_backend
-        return self._memory_backend
+        if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
+            return self._memory_backend
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase is not configured for dementia analysis persistence.",
+        )
 
     def _get_transcribe_client(self):
         if self._transcribe_client is None:

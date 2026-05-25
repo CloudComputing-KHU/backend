@@ -2,6 +2,8 @@ import os
 import uuid
 from datetime import date, datetime, timezone
 
+from fastapi import HTTPException
+
 from app.schemas.answer import AnswerRequest
 from app.schemas.question import Question, QuestionType
 from app.services.supabase_service import supabase_service
@@ -215,7 +217,12 @@ class QuestionService:
             return self._backend_override
         if self._supabase_backend.is_configured():
             return self._supabase_backend
-        return self._memory_backend
+        if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
+            return self._memory_backend
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase is not configured for question persistence.",
+        )
 
     @staticmethod
     def get_todays_question(q_type: QuestionType) -> Question | None:
@@ -255,6 +262,26 @@ class QuestionService:
 
     def get_answer_by_id(self, answer_id: str) -> dict | None:
         return self._backend().get_answer_by_id(answer_id)
+
+    def get_daily_progress(self, user_id: str) -> dict:
+        progress = {
+            "health_answered": self.has_answered_today("health", user_id),
+            "meal_answered": self.has_answered_today("meal", user_id),
+            "mood_answered": self.has_answered_today("mood", user_id),
+        }
+        completed_count = sum(1 for answered in progress.values() if answered)
+        next_type = None
+        for q_type in ("health", "meal", "mood"):
+            if not progress[f"{q_type}_answered"]:
+                next_type = q_type
+                break
+        return {
+            "user_id": user_id,
+            **progress,
+            "completed_count": completed_count,
+            "next_type": next_type,
+            "all_answered": completed_count == 3,
+        }
 
 
 question_service = QuestionService()
