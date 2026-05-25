@@ -121,6 +121,15 @@ class AuthService:
                 raise HTTPException(status_code=403, detail="이메일 인증이 완료되지 않았습니다.")
             raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
 
+    def logout(self, access_token: str) -> None:
+        try:
+            self._get_client().global_sign_out(AccessToken=access_token)
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code == "NotAuthorizedException":
+                raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
+            raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
+
     def refresh(self, refresh_token: str) -> dict:
         try:
             resp = self._get_client().initiate_auth(

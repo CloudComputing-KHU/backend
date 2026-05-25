@@ -7,6 +7,7 @@ from app.schemas.auth import (
     ConfirmResponse,
     LoginRequest,
     LoginResponse,
+    LogoutRequest,
     RefreshRequest,
     RefreshResponse,
     SignUpRequest,
@@ -49,3 +50,10 @@ def login(request: LoginRequest):
 def refresh(request: RefreshRequest):
     result = auth_service.refresh(request.refresh_token)
     return RefreshResponse(**result)
+
+
+@router.post("/logout")
+def logout(request: LogoutRequest):
+    logger.info("로그아웃 요청")
+    auth_service.logout(request.access_token)
+    return {"message": "로그아웃됐습니다."}

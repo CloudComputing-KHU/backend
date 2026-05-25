@@ -86,6 +86,8 @@ def get_user_answers(type: QuestionType, current_user: dict = Depends(get_curren
 def submit_answer(type: QuestionType, request: AnswerRequest, current_user: dict = Depends(get_current_user)):
     require_role(current_user, "parent")
     user_id = current_user["sub"]
+    if question_service.has_answered_today(type, user_id):
+        raise HTTPException(status_code=409, detail="오늘 이미 답변하셨습니다.")
     logger.info("텍스트 답변 저장 - type=%s, user_id=%s", type, user_id)
     question_service.save_answer(type, request, user_id)
     receiver_user_id = family_service.get_linked_user_id(user_id)
@@ -107,6 +109,8 @@ async def submit_voice_answer(
 ):
     require_role(current_user, "parent")
     user_id = current_user["sub"]
+    if question_service.has_answered_today(type, user_id):
+        raise HTTPException(status_code=409, detail="오늘 이미 답변하셨습니다.")
     logger.info("음성 답변 업로드 - type=%s, user_id=%s, filename=%s", type, user_id, file.filename)
 
     contents = await file.read()

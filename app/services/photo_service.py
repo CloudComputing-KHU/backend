@@ -273,6 +273,9 @@ class PhotoService:
     def get_scheduled_photos(self) -> List[dict]:
         return self._backend().get_scheduled_photos()
 
+    def mark_photo_sent(self, photo_id: str) -> dict | None:
+        return self._backend().mark_photo_sent(photo_id)
+
     async def schedule_dispatch(self, photo_record: dict) -> None:
         scheduled_at = photo_record["scheduled_at"]
         if isinstance(scheduled_at, str):

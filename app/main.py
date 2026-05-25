@@ -26,8 +26,12 @@ async def lifespan(app: FastAPI):
         scheduled_at = photo.get("scheduled_at")
         if isinstance(scheduled_at, str):
             scheduled_at = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
-        if scheduled_at and scheduled_at.replace(tzinfo=scheduled_at.tzinfo or timezone.utc) <= now:
-            updated = photo_service._backend().mark_photo_sent(photo["photo_id"])
+        if scheduled_at is None:
+            continue
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        if scheduled_at <= now:
+            updated = photo_service.mark_photo_sent(photo["photo_id"])
             if updated:
                 notification_service.send(
                     user_id=updated["receiver_user_id"],

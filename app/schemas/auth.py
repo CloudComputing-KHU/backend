@@ -51,3 +51,7 @@ class RefreshResponse(BaseModel):
     id_token: str
     expires_in: int
     token_type: str = "Bearer"
+
+
+class LogoutRequest(BaseModel):
+    access_token: str

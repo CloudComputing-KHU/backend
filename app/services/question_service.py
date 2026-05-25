@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.schemas.answer import AnswerRequest
 from app.schemas.question import Question, QuestionType
@@ -97,6 +97,16 @@ class InMemoryQuestionBackend:
         return sorted(filtered_answers, key=lambda x: x["created_at"], reverse=True)
 
     @staticmethod
+    def has_answered_today(q_type: QuestionType, user_id: str) -> bool:
+        today = date.today()
+        for ans in mock_answers:
+            if ans["type"] == q_type and ans["user_id"] == user_id:
+                created_at = ans["created_at"]
+                if isinstance(created_at, datetime) and created_at.date() == today:
+                    return True
+        return False
+
+    @staticmethod
     def get_answer_by_id(answer_id: str) -> dict | None:
         for answer in mock_answers:
             if answer["answer_id"] == answer_id:
@@ -166,6 +176,19 @@ class SupabaseQuestionBackend:
             order="created_at.desc",
         )
 
+    def has_answered_today(self, q_type: QuestionType, user_id: str) -> bool:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        results = supabase_service.select(
+            self.table,
+            filters=[
+                ("type", f"eq.{q_type}"),
+                ("user_id", f"eq.{user_id}"),
+                ("created_at", f"gte.{today_start}"),
+            ],
+            limit=1,
+        )
+        return len(results) > 0
+
     def get_answer_by_id(self, answer_id: str) -> dict | None:
         results = supabase_service.select(
             self.table,
@@ -226,6 +249,9 @@ class QuestionService:
 
     def get_user_answers(self, q_type: QuestionType, user_id: str) -> list[dict]:
         return self._backend().get_user_answers(q_type, user_id)
+
+    def has_answered_today(self, q_type: QuestionType, user_id: str) -> bool:
+        return self._backend().has_answered_today(q_type, user_id)
 
     def get_answer_by_id(self, answer_id: str) -> dict | None:
         return self._backend().get_answer_by_id(answer_id)
