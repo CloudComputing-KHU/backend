@@ -6,9 +6,11 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 
+from boto3.dynamodb.conditions import Attr, Key
+
 from app.schemas.photo import PhotoStatus
 from app.services.notification_service import notification_service
-from app.services.supabase_service import supabase_service
+from app.services.dynamodb_service import dynamodb_service, _convert_decimals, _strip_none
 
 mock_photos = []
 mock_reactions = []
@@ -111,18 +113,18 @@ class InMemoryPhotoBackend:
         return record
 
 
-class SupabasePhotoBackend:
+class DynamoDBPhotoBackend:
     @property
     def photos_table(self) -> str:
-        return os.getenv("SUPABASE_PHOTOS_TABLE", "photos")
+        return os.getenv("DYNAMODB_PHOTOS_TABLE", "photos")
 
     @property
     def reactions_table(self) -> str:
-        return os.getenv("SUPABASE_PHOTO_REACTIONS_TABLE", "photo_reactions")
+        return os.getenv("DYNAMODB_PHOTO_REACTIONS_TABLE", "photo_reactions")
 
     @staticmethod
     def is_configured() -> bool:
-        return supabase_service.is_configured()
+        return dynamodb_service.is_configured()
 
     def save_photo(
         self,
@@ -134,77 +136,89 @@ class SupabasePhotoBackend:
     ) -> dict:
         scheduled_at = normalize_scheduled_at(scheduled_at)
         status: PhotoStatus = "scheduled" if scheduled_at else "sent"
-        record = {
+        record: dict = {
             "photo_id": f"photo_{uuid.uuid4().hex[:8]}",
             "sender_user_id": sender_user_id,
             "receiver_user_id": receiver_user_id,
             "image_url": file_path,
-            "caption": caption,
-            "scheduled_at": scheduled_at.isoformat() if isinstance(scheduled_at, datetime) else scheduled_at,
             "status": status,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return supabase_service.insert(self.photos_table, record)[0]
+        if caption:
+            record["caption"] = caption
+        if scheduled_at:
+            record["scheduled_at"] = scheduled_at.isoformat() if isinstance(scheduled_at, datetime) else scheduled_at
+        dynamodb_service.table(self.photos_table).put_item(Item=record)
+        return record
 
     def get_photo_history(self, user_id: str) -> List[dict]:
-        return supabase_service.select(
-            self.photos_table,
-            filters=[("sender_user_id", f"eq.{user_id}")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.photos_table).query(
+            IndexName="sender-index",
+            KeyConditionExpression=Key("sender_user_id").eq(user_id),
+            ScanIndexForward=False,
         )
+        return [_convert_decimals(item) for item in resp.get("Items", [])]
 
     def get_received_photos(self, user_id: str) -> List[dict]:
-        new_photos = supabase_service.select(
-            self.photos_table,
-            filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "eq.sent")],
-            order="created_at.desc",
+        table = dynamodb_service.table(self.photos_table)
+        resp = table.query(
+            IndexName="receiver-index",
+            KeyConditionExpression=Key("receiver_user_id").eq(user_id) & Key("status").eq("sent"),
         )
-        if new_photos:
-            supabase_service.update(
-                self.photos_table,
-                filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "eq.sent")],
-                payload={"status": "seen"},
+        new_photos = [_convert_decimals(item) for item in resp.get("Items", [])]
+        for p in new_photos:
+            table.update_item(
+                Key={"photo_id": p["photo_id"]},
+                UpdateExpression="SET #s = :s",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "seen"},
             )
-            for p in new_photos:
-                p["status"] = "seen"
-        return new_photos
+            p["status"] = "seen"
+        return sorted(new_photos, key=lambda x: x.get("created_at", ""), reverse=True)
 
     def get_received_photos_history(self, user_id: str) -> List[dict]:
-        return supabase_service.select(
-            self.photos_table,
-            filters=[("receiver_user_id", f"eq.{user_id}"), ("status", "neq.scheduled")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.photos_table).query(
+            IndexName="receiver-index",
+            KeyConditionExpression=Key("receiver_user_id").eq(user_id),
+            FilterExpression=Attr("status").ne("scheduled"),
         )
+        items = [_convert_decimals(item) for item in resp.get("Items", [])]
+        return sorted(items, key=lambda x: x.get("created_at", ""), reverse=True)
 
     def get_scheduled_photos(self) -> List[dict]:
-        return supabase_service.select(
-            self.photos_table,
-            filters=[("status", "eq.scheduled")],
-            order="scheduled_at.asc",
+        resp = dynamodb_service.table(self.photos_table).scan(
+            FilterExpression=Attr("status").eq("scheduled"),
         )
+        items = [_convert_decimals(item) for item in resp.get("Items", [])]
+        return sorted(items, key=lambda x: x.get("scheduled_at", ""))
 
     def get_photo(self, photo_id: str) -> dict | None:
-        rows = supabase_service.select(
-            self.photos_table,
-            filters=[("photo_id", f"eq.{photo_id}")],
-            limit=1,
-        )
-        return rows[0] if rows else None
+        resp = dynamodb_service.table(self.photos_table).get_item(Key={"photo_id": photo_id})
+        item = resp.get("Item")
+        return _convert_decimals(item) if item else None
 
     def mark_photo_sent(self, photo_id: str) -> dict | None:
-        rows = supabase_service.update(
-            self.photos_table,
-            filters=[("photo_id", f"eq.{photo_id}")],
-            payload={"status": "sent"},
+        table = dynamodb_service.table(self.photos_table)
+        resp = table.get_item(Key={"photo_id": photo_id})
+        item = resp.get("Item")
+        if not item:
+            return None
+        table.update_item(
+            Key={"photo_id": photo_id},
+            UpdateExpression="SET #s = :s",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "sent"},
         )
-        return rows[0] if rows else None
+        item = dict(item)
+        item["status"] = "sent"
+        return _convert_decimals(item)
 
     def get_reactions(self, photo_id: str) -> List[dict]:
-        return supabase_service.select(
-            self.reactions_table,
-            filters=[("photo_id", f"eq.{photo_id}")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.reactions_table).query(
+            KeyConditionExpression=Key("photo_id").eq(photo_id),
         )
+        items = [_convert_decimals(item) for item in resp.get("Items", [])]
+        return sorted(items, key=lambda x: x.get("created_at", ""), reverse=True)
 
     def save_reaction(
         self,
@@ -215,23 +229,27 @@ class SupabasePhotoBackend:
         voice_url: Optional[str] = None,
         duration_seconds: Optional[int] = None,
     ) -> dict:
-        record = {
+        record: dict = {
             "reaction_id": f"reaction_{uuid.uuid4().hex[:8]}",
             "photo_id": photo_id,
             "user_id": user_id,
             "reaction_type": reaction_type,
-            "label": label,
-            "voice_url": voice_url,
-            "duration_seconds": duration_seconds,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return supabase_service.insert(self.reactions_table, record)[0]
+        if label:
+            record["label"] = label
+        if voice_url:
+            record["voice_url"] = voice_url
+        if duration_seconds is not None:
+            record["duration_seconds"] = duration_seconds
+        dynamodb_service.table(self.reactions_table).put_item(Item=record)
+        return record
 
 
 class PhotoService:
     def __init__(self) -> None:
         self._memory_backend = InMemoryPhotoBackend()
-        self._supabase_backend = SupabasePhotoBackend()
+        self._dynamodb_backend = DynamoDBPhotoBackend()
         self._backend_override = None
 
     def set_backend(self, backend) -> None:
@@ -243,13 +261,13 @@ class PhotoService:
     def _backend(self):
         if self._backend_override is not None:
             return self._backend_override
-        if self._supabase_backend.is_configured():
-            return self._supabase_backend
+        if self._dynamodb_backend.is_configured():
+            return self._dynamodb_backend
         if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
             return self._memory_backend
         raise HTTPException(
             status_code=500,
-            detail="Supabase is not configured for photo persistence.",
+            detail="DynamoDB is not configured for photo persistence.",
         )
 
     def save_photo(

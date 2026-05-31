@@ -1,17 +1,19 @@
 import os
 from datetime import datetime, timezone
 
+from boto3.dynamodb.conditions import Key
+
 from app.services.family_service import normalize_role
-from app.services.supabase_service import supabase_service
+from app.services.dynamodb_service import dynamodb_service, _build_update_expr, _strip_none
 
 
 class UserProfileService:
     @property
-    def _table(self) -> str:
-        return os.getenv("SUPABASE_USER_PROFILES_TABLE", "user_profiles")
+    def _table_name(self) -> str:
+        return os.getenv("DYNAMODB_USER_PROFILES_TABLE", "user_profiles")
 
     def is_configured(self) -> bool:
-        return supabase_service.is_configured()
+        return dynamodb_service.is_configured()
 
     def upsert_profile(
         self,
@@ -25,28 +27,47 @@ class UserProfileService:
     ) -> None:
         if not self.is_configured() or not user_id:
             return
-        payload = {
-            "user_id": user_id,
+
+        updates: dict = _strip_none({
             "email": email,
             "name": name,
             "role": normalize_role(role),
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
+        })
         if is_confirmed is not None:
-            payload["is_confirmed"] = is_confirmed
+            updates["is_confirmed"] = is_confirmed
         if last_login_at is not None:
-            payload["last_login_at"] = last_login_at.isoformat()
-        supabase_service.upsert(self._table, payload, on_conflict="user_id")
+            updates["last_login_at"] = last_login_at.isoformat()
+
+        expr, names, values = _build_update_expr(updates)
+        dynamodb_service.table(self._table_name).update_item(
+            Key={"user_id": user_id},
+            UpdateExpression=expr,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
 
     def mark_confirmed_by_email(self, email: str) -> None:
         if not self.is_configured() or not email:
             return
-        supabase_service.update(
-            self._table,
-            filters=[("email", f"eq.{email}")],
-            payload={
-                "is_confirmed": True,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+
+        table = dynamodb_service.table(self._table_name)
+        resp = table.query(
+            IndexName="email-index",
+            KeyConditionExpression=Key("email").eq(email),
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return
+
+        table.update_item(
+            Key={"user_id": items[0]["user_id"]},
+            UpdateExpression="SET #ic = :ic, #ua = :ua",
+            ExpressionAttributeNames={"#ic": "is_confirmed", "#ua": "updated_at"},
+            ExpressionAttributeValues={
+                ":ic": True,
+                ":ua": datetime.now(timezone.utc).isoformat(),
             },
         )
 

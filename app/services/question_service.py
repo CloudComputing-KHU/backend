@@ -6,7 +6,9 @@ from fastapi import HTTPException
 
 from app.schemas.answer import AnswerRequest
 from app.schemas.question import Question, QuestionType
-from app.services.supabase_service import supabase_service
+from boto3.dynamodb.conditions import Attr, Key
+
+from app.services.dynamodb_service import dynamodb_service, _convert_decimals
 
 mock_questions = {
     "health": [
@@ -116,14 +118,20 @@ class InMemoryQuestionBackend:
         return None
 
 
-class SupabaseQuestionBackend:
+class DynamoDBQuestionBackend:
     @property
-    def table(self) -> str:
-        return os.getenv("SUPABASE_ANSWERS_TABLE", "answers")
+    def table_name(self) -> str:
+        return os.getenv("DYNAMODB_ANSWERS_TABLE", "answers")
 
     @staticmethod
     def is_configured() -> bool:
-        return supabase_service.is_configured()
+        return dynamodb_service.is_configured()
+
+    def _put_answer(self, record: dict) -> dict:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        record["type_date"] = f"{record['type']}#{today}"
+        dynamodb_service.table(self.table_name).put_item(Item={k: v for k, v in record.items() if v is not None})
+        return record
 
     def save_answer(self, q_type: QuestionType, request: AnswerRequest, user_id: str) -> dict:
         record = {
@@ -133,15 +141,9 @@ class SupabaseQuestionBackend:
             "question_id": request.question_id,
             "answer_type": request.answer_type,
             "answer": request.answer,
-            "voice_status": None,
-            "voice_file_key": None,
-            "original_filename": None,
-            "stored_filename": None,
-            "content_type": None,
-            "file_size": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return supabase_service.insert(self.table, record)[0]
+        return self._put_answer(record)
 
     def save_voice_answer_metadata(
         self,
@@ -160,7 +162,6 @@ class SupabaseQuestionBackend:
             "user_id": user_id,
             "question_id": question_id,
             "answer_type": "voice",
-            "answer": None,
             "voice_status": "uploaded",
             "voice_file_key": file_path,
             "original_filename": original_filename,
@@ -169,41 +170,37 @@ class SupabaseQuestionBackend:
             "file_size": file_size,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return supabase_service.insert(self.table, record)[0]
+        return self._put_answer(record)
 
     def get_user_answers(self, q_type: QuestionType, user_id: str) -> list[dict]:
-        return supabase_service.select(
-            self.table,
-            filters=[("type", f"eq.{q_type}"), ("user_id", f"eq.{user_id}")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.table_name).query(
+            IndexName="answer-type-index",
+            KeyConditionExpression=Key("user_id").eq(user_id) & Key("type_date").begins_with(f"{q_type}#"),
+            ScanIndexForward=False,
         )
+        return [_convert_decimals(item) for item in resp.get("Items", [])]
 
     def has_answered_today(self, q_type: QuestionType, user_id: str) -> bool:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        results = supabase_service.select(
-            self.table,
-            filters=[
-                ("type", f"eq.{q_type}"),
-                ("user_id", f"eq.{user_id}"),
-                ("created_at", f"gte.{today_start}"),
-            ],
-            limit=1,
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        resp = dynamodb_service.table(self.table_name).query(
+            IndexName="answer-type-index",
+            KeyConditionExpression=Key("user_id").eq(user_id) & Key("type_date").begins_with(f"{q_type}#{today}"),
+            Limit=1,
         )
-        return len(results) > 0
+        return len(resp.get("Items", [])) > 0
 
     def get_answer_by_id(self, answer_id: str) -> dict | None:
-        results = supabase_service.select(
-            self.table,
-            filters=[("answer_id", f"eq.{answer_id}")],
-            limit=1,
+        resp = dynamodb_service.table(self.table_name).scan(
+            FilterExpression=Attr("answer_id").eq(answer_id),
         )
-        return results[0] if results else None
+        items = resp.get("Items", [])
+        return _convert_decimals(items[0]) if items else None
 
 
 class QuestionService:
     def __init__(self) -> None:
         self._memory_backend = InMemoryQuestionBackend()
-        self._supabase_backend = SupabaseQuestionBackend()
+        self._dynamodb_backend = DynamoDBQuestionBackend()
         self._backend_override = None
 
     def set_backend(self, backend) -> None:
@@ -215,13 +212,13 @@ class QuestionService:
     def _backend(self):
         if self._backend_override is not None:
             return self._backend_override
-        if self._supabase_backend.is_configured():
-            return self._supabase_backend
+        if self._dynamodb_backend.is_configured():
+            return self._dynamodb_backend
         if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
             return self._memory_backend
         raise HTTPException(
             status_code=500,
-            detail="Supabase is not configured for question persistence.",
+            detail="DynamoDB is not configured for question persistence.",
         )
 
     @staticmethod
