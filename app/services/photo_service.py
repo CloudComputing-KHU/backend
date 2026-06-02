@@ -302,6 +302,9 @@ class PhotoService:
     def get_reactions(self, photo_id: str) -> List[dict]:
         return self._backend().get_reactions(photo_id)
 
+    def get_photo(self, photo_id: str) -> dict | None:
+        return self._backend().get_photo(photo_id)
+
     def save_reaction(
         self,
         photo_id: str,

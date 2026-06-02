@@ -136,6 +136,15 @@ async def submit_voice_answer(
 
     logger.info("음성 답변 저장 완료 - user_id=%s", user_id)
 
+    receiver_user_id = family_service.get_linked_user_id(user_id)
+    if receiver_user_id:
+        notification_service.send(
+            user_id=receiver_user_id,
+            title="새 답변이 도착했어요",
+            body="가족이 오늘의 질문에 음성으로 답했어요.",
+            data={"type": "answer_received", "question_type": type},
+        )
+
     return VoiceUploadResponse(
         message="Voice uploaded",
         answer_id=answer_record["answer_id"],

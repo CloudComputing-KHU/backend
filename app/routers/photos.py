@@ -163,6 +163,14 @@ def save_quick_reaction(
         reaction_type="quick",
         label=request.label,
     )
+    photo = photo_service.get_photo(photo_id)
+    if photo:
+        notification_service.send(
+            user_id=photo["sender_user_id"],
+            title="사진에 반응이 왔어요",
+            body=f"가족이 사진에 반응했어요: {request.label}",
+            data={"photo_id": photo_id, "type": "photo_reaction"},
+        )
     return {**record, "presigned_url": None}
 
 
@@ -195,4 +203,12 @@ async def save_voice_reaction(
         voice_url=voice_url,
         duration_seconds=duration_seconds,
     )
+    photo = photo_service.get_photo(photo_id)
+    if photo:
+        notification_service.send(
+            user_id=photo["sender_user_id"],
+            title="사진에 음성 반응이 왔어요",
+            body="가족이 사진에 음성으로 반응했어요.",
+            data={"photo_id": photo_id, "type": "photo_reaction"},
+        )
     return {**record, "presigned_url": storage_service.generate_presigned_url(voice_url)}
