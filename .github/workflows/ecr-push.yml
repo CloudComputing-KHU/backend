@@ -1,4 +1,4 @@
-name: Push Docker Image to ECR
+name: Push Backend Service Image to ECR
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: itda
+  IMAGE_TAG: latest
 
 jobs:
   build-and-push:
@@ -26,13 +27,22 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push image to ECR
         run: |
-          IMAGE_URI=501222039467.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}
 
-          docker build -t $IMAGE_URI ./test
-          docker push $IMAGE_URI
+          docker build \
+            --file Dockerfile \
+            --tag $IMAGE_URI:${IMAGE_TAG} \
+            --tag $IMAGE_URI:${GITHUB_SHA} \
+            .
 
-          echo "Pushed image: $IMAGE_URI"
+          docker push $IMAGE_URI:${IMAGE_TAG}
+          docker push $IMAGE_URI:${GITHUB_SHA}
+
+          echo "Pushed image: $IMAGE_URI:${IMAGE_TAG}"
+          echo "Pushed image: $IMAGE_URI:${GITHUB_SHA}"
