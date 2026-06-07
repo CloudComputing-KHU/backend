@@ -3,7 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import answers, auth, dementia, devices, family, notifications, photos, questions
@@ -20,7 +20,15 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduled_photos = photo_service.get_scheduled_photos()
+    try:
+        scheduled_photos = photo_service.get_scheduled_photos()
+    except HTTPException as exc:
+        scheduled_photos = []
+        logger.warning("예약 사진 복구 건너뜀 - detail=%s", exc.detail)
+    except Exception:
+        scheduled_photos = []
+        logger.exception("예약 사진 복구 중 예외 발생")
+
     now = datetime.now(timezone.utc)
     for photo in scheduled_photos:
         scheduled_at = photo.get("scheduled_at")
