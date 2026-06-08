@@ -25,7 +25,7 @@
 | S3 파일 업로드 (음성, 사진) | 완료 |
 | 사진 압축/리사이즈 | 완료 |
 | 치매 위험 분석 API + Lambda | 완료 |
-| DB 연동 (최종 DynamoDB 예정) | 진행 중 — 현재 Supabase로 메타데이터 영속화 |
+| DB 연동 (DynamoDB) | 완료 |
 | 수신 사진 조회 API | 완료 |
 | 예약 사진 전송 스케줄러 | 완료 |
 | Presigned URL (음성/사진 접근) | 완료 |
@@ -59,13 +59,13 @@ app/
   │   └── device.py           # 디바이스 토큰 등록 형식
   └── services/               # 실제 비즈니스 로직(DB 저장, 필터링, 정렬 등)을 수행
       ├── auth_service.py     # Cognito 인증 및 JWT 검증 로직
-      ├── family_service.py   # 부모-자녀 초대코드/연결 로직 (Supabase / 테스트 fallback)
-      ├── question_service.py # 질문/답변 저장 로직 (Supabase / 테스트 fallback)
-      ├── photo_service.py    # 사진/반응 저장 로직 (Supabase / 테스트 fallback)
-      ├── dementia_service.py # 치매 분석 파이프라인 + 결과 저장 (Supabase / 테스트 fallback)
+      ├── family_service.py   # 부모-자녀 초대코드/연결 로직 (DynamoDB / 테스트 fallback)
+      ├── question_service.py # 질문/답변 저장 로직 (DynamoDB / 테스트 fallback)
+      ├── photo_service.py    # 사진/반응 저장 로직 (DynamoDB / 테스트 fallback)
+      ├── dementia_service.py # 치매 분석 파이프라인 + 결과 저장 (DynamoDB / 테스트 fallback)
       ├── storage_service.py  # S3 파일 업로드 로직 (음성, 사진)
-      ├── supabase_service.py # Supabase REST API 호출 로직
-      ├── user_profile_service.py # Cognito 회원정보 → Supabase 프로필 동기화
+      ├── dynamodb_service.py # DynamoDB 공통 접근 유틸
+      ├── user_profile_service.py # Cognito 회원정보 → DynamoDB 프로필 동기화
       └── notification_service.py  # FCM 토큰/알림 저장 + 발송 로직
 lambda/
   └── dementia_analyzer/
@@ -173,42 +173,32 @@ CHANGELOG.md                 # 날짜/작성자 기준 변경 이력
   }
   ```
 
-#### Supabase 테이블 준비
-- 현재 백엔드는 로컬 메모리 대신 Supabase에 메타데이터를 저장합니다.
-- SQL Editor에서 `docs/supabase-family-schema.sql`을 먼저 실행해야 합니다.
-- 파일명은 `family`로 시작하지만, 실제로는 아래 전체 테이블을 생성합니다.
+#### DynamoDB 테이블 준비
+- 현재 백엔드는 로컬 메모리 대신 DynamoDB에 메타데이터를 저장합니다.
+- 테이블은 스크립트로 생성합니다.
+- 실행 명령:
+  ```bash
+  uv run python scripts/create_dynamodb_tables.py
+  ```
+- 생성 대상 테이블:
   - `user_profiles`
   - `family_invites`
   - `family_links`
   - `answers`
   - `photos`
   - `photo_reactions`
-  - `dementia_analyses`
+  - `dementia_assessments`
   - `device_tokens`
   - `notifications`
 - 실행 환경에서는 `ALLOW_IN_MEMORY_FALLBACK=false`를 유지하세요.
-  - 이 값이 `false`면 Supabase 설정이 누락됐을 때 서버가 즉시 오류를 반환합니다.
+  - 이 값이 `false`면 DynamoDB 설정이 누락됐을 때 서버가 즉시 오류를 반환합니다.
   - 조용히 in-memory로 떨어져서 서버 재시작 때 가족 연결/답변/사진 이력이 사라지는 문제를 막기 위한 설정입니다.
-- 필요한 환경변수는 `.env.example:27`에 정리돼 있습니다.
-
-#### Supabase SQL Editor에서 실제로 할 일
-1. Supabase 프로젝트에 들어갑니다.
-2. 왼쪽 메뉴에서 `SQL Editor`를 엽니다.
-3. `New query`를 누릅니다.
-4. `backend/docs/supabase-family-schema.sql` 파일 내용을 전체 복사해서 붙여넣습니다.
-5. `Run`을 눌러 실행합니다.
-6. 실행 후 `Table Editor`에서 아래 테이블들이 생성됐는지 확인합니다.
-   - `user_profiles`
-   - `family_invites`
-   - `family_links`
-   - `answers`
-   - `photos`
-   - `photo_reactions`
-   - `dementia_analyses`
-   - `device_tokens`
-   - `notifications`
-
-이 작업을 해야 백엔드가 Supabase에 데이터를 저장할 수 있습니다. 이걸 하지 않으면 API는 테이블 없음 오류로 실패합니다.
+- 필요한 환경변수는 `.env.example`에 정리돼 있습니다.
+- 실제 사용 권장값:
+  - `AUTH_AWS_REGION=us-east-1`
+  - `DATA_AWS_REGION=ap-northeast-2`
+  - `AWS_REGION=ap-northeast-2`
+  - `DYNAMODB_REGION=ap-northeast-2`
 
 ---
 
@@ -413,9 +403,9 @@ Firebase Cloud Messaging(FCM)을 통해 Android/iOS 모두 지원합니다.
 - `.env.example` 추가
 - 음성 업로드 S3 실연동
 - 사진 업로드 S3 실연동
-- Supabase 기반 메타데이터 영속화 추가
-- Cognito 회원가입 시 Supabase `user_profiles` 동기화 추가
-- 가족 연결/답변/사진/치매 분석/디바이스 토큰/알림 저장을 Supabase로 전환
+- DynamoDB 기반 메타데이터 영속화 추가
+- Cognito 회원가입 시 DynamoDB `user_profiles` 동기화 추가
+- 가족 연결/답변/사진/치매 분석/디바이스 토큰/알림 저장을 DynamoDB로 전환
 - AWS CLI와 `boto3` 기반 S3 적재 확인 절차 추가
 - 중복 가상환경 `venv/` 제거, `.venv/`만 유지
 - 변경 이력 문서 `CHANGELOG.md` 추가
@@ -467,10 +457,10 @@ uv run python scripts/benchmark_photo.py photo1.jpg photo2.png
 
 ## 참고 및 확장 가이드
 
-- **Supabase 저장 사용**: 질문은 코드에 정적 보관하지만, 회원 프로필/가족 연결/답변/사진/사진 반응/치매 분석/디바이스 토큰/알림은 Supabase에 저장합니다.
+- **DynamoDB 저장 사용**: 질문은 코드에 정적 보관하지만, 회원 프로필/가족 연결/답변/사진/사진 반응/치매 분석/디바이스 토큰/알림은 DynamoDB에 저장합니다.
 - **S3 업로드 적용**: 음성 업로드와 사진 업로드 파일 본문은 현재 실제 AWS S3에 저장됩니다.
 - **테스트 fallback 유지**: pytest에서는 외부 네트워크 없이 검증할 수 있도록 in-memory fallback backend를 유지합니다.
-- **TODO 주석 활용**: 최종 목표는 DynamoDB 전환이며, 확장이 필요한 구간은 코드 내부 `# TODO:`로 유지합니다.
+- **TODO 주석 활용**: 향후 조회 패턴 최적화나 GSI 보강이 필요하면 코드 내부 `# TODO:`를 기준으로 확장합니다.
 
 ## 로컬 실행 방법
 
@@ -488,28 +478,28 @@ AUTH_AWS_REGION=us-east-1
 COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx
 COGNITO_APP_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# AWS - Data (S3 / Transcribe / future DynamoDB)
+# AWS - Data (S3 / Transcribe / DynamoDB)
 AWS_ACCESS_KEY_ID=your-access-key-id
 AWS_SECRET_ACCESS_KEY=your-secret-access-key
 DATA_AWS_REGION=ap-northeast-2
+AWS_REGION=ap-northeast-2
+DYNAMODB_REGION=ap-northeast-2
 S3_BUCKET_NAME=cloud-compute-team-e
 S3_VOICE_PREFIX=voices
 S3_PHOTO_PREFIX=photos
 S3_URL_MODE=s3_uri
 
-# Supabase
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-SUPABASE_SCHEMA=public
-SUPABASE_USER_PROFILES_TABLE=user_profiles
-SUPABASE_FAMILY_INVITES_TABLE=family_invites
-SUPABASE_FAMILY_LINKS_TABLE=family_links
-SUPABASE_ANSWERS_TABLE=answers
-SUPABASE_PHOTOS_TABLE=photos
-SUPABASE_PHOTO_REACTIONS_TABLE=photo_reactions
-SUPABASE_DEMENTIA_ANALYSES_TABLE=dementia_analyses
-SUPABASE_DEVICE_TOKENS_TABLE=device_tokens
-SUPABASE_NOTIFICATIONS_TABLE=notifications
+# DynamoDB
+DYNAMODB_USER_PROFILES_TABLE=user_profiles
+DYNAMODB_FAMILY_INVITES_TABLE=family_invites
+DYNAMODB_FAMILY_LINKS_TABLE=family_links
+DYNAMODB_ANSWERS_TABLE=answers
+DYNAMODB_PHOTOS_TABLE=photos
+DYNAMODB_PHOTO_REACTIONS_TABLE=photo_reactions
+DYNAMODB_DEMENTIA_ANALYSES_TABLE=dementia_assessments
+DYNAMODB_DEVICE_TOKENS_TABLE=device_tokens
+DYNAMODB_NOTIFICATIONS_TABLE=notifications
+ALLOW_IN_MEMORY_FALLBACK=false
 
 # 푸시 알림 (둘 중 하나)
 FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/serviceAccountKey.json
@@ -531,6 +521,20 @@ uv run poe serve
 ```
 
 실행 후 웹 브라우저에서 `http://127.0.0.1:8000/docs`에 접속하면 API 명세 확인 및 테스트를 바로 진행할 수 있습니다.
+
+## 검증 기록
+
+### 2026-06-08 기준 검증 성공
+
+```bash
+uv run python scripts/create_dynamodb_tables.py
+uv run pytest test/test_questions_router.py test/test_answers_router.py test/test_family_router.py test/test_relation_based_routes.py -q
+uv run python scripts/verify_imports.py
+```
+
+- DynamoDB 테이블 9개 생성 또는 기존 테이블 `[SKIP]` 확인
+- 핵심 테스트 `10 passed`
+- import 검증 `ALL 21 modules imported successfully`
 
 ## 음성 업로드 검증 방법
 
