@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## 2026-06-08
+
+### Author
+- `kangtaeyeong`
+
+### Changes
+- Fixed `scripts/verify_imports.py` so it automatically adds the repository root to `sys.path` and can run without manual `PYTHONPATH=.`.
+- Cleaned up `.env.example` formatting by removing invalid spaces around Cognito environment variables.
+- Updated `.env.example` and `README.md` to reflect the current DynamoDB-based persistence setup instead of outdated Supabase guidance.
+- Added validation records in `README.md` for:
+  - DynamoDB table creation script
+  - focused pytest suite
+  - import verification script
+
+### Verified
+- `uv run python scripts/create_dynamodb_tables.py` 실행 시 DynamoDB 테이블 생성 또는 `[SKIP]` 확인.
+- `uv run pytest test/test_questions_router.py test/test_answers_router.py test/test_family_router.py test/test_relation_based_routes.py -q` 통과.
+- `uv run python scripts/verify_imports.py` 통과.
+
+### Follow-up
+- If `uv.lock` changed only as a local tooling side effect, keep it out of this docs/env cleanup PR unless dependency intent is explicit.
+
 ## 2026-05-25
 
 ### Author
