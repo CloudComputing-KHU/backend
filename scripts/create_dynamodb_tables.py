@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-REGION = os.getenv("DYNAMODB_REGION", os.getenv("AWS_REGION", "us-east-1"))
+REGION = os.getenv("DYNAMODB_REGION", os.getenv("AWS_REGION", "ap-northeast-2"))
 
 client = boto3.client("dynamodb", region_name=REGION)
 
