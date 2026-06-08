@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
-from app.services.supabase_service import supabase_service
+from boto3.dynamodb.conditions import Attr, Key
+
+from app.services.dynamodb_service import dynamodb_service, _convert_decimals
 
 INVITE_TTL_MINUTES = 10
 INVITE_CODE_LENGTH = 4
@@ -178,138 +180,118 @@ class InMemoryFamilyBackend:
         }
 
 
-class SupabaseFamilyBackend:
+class DynamoDBFamilyBackend:
     @staticmethod
     def is_configured() -> bool:
-        return supabase_service.is_configured()
-
-    @staticmethod
-    def _utc_now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat()
-
-    @staticmethod
-    def _table_name(env_name: str, default: str) -> str:
-        import os
-
-        return os.getenv(env_name, default)
+        return dynamodb_service.is_configured()
 
     @property
     def invites_table(self) -> str:
-        return self._table_name("SUPABASE_FAMILY_INVITES_TABLE", "family_invites")
+        return os.getenv("DYNAMODB_FAMILY_INVITES_TABLE", "family_invites")
 
     @property
     def links_table(self) -> str:
-        return self._table_name("SUPABASE_FAMILY_LINKS_TABLE", "family_links")
+        return os.getenv("DYNAMODB_FAMILY_LINKS_TABLE", "family_links")
 
-    def _select(
-        self,
-        table: str,
-        *,
-        filters: list[tuple[str, str]],
-        order: str | None = None,
-        limit: int | None = None,
-    ) -> list[dict]:
-        params = [("select", "*"), *filters]
-        if order:
-            params.append(("order", order))
-        if limit is not None:
-            params.append(("limit", str(limit)))
-        result = supabase_service.request("GET", f"/rest/v1/{table}", params=params)
-        return result or []
-
-    def _insert(self, table: str, payload: dict) -> dict:
-        result = supabase_service.request(
-            "POST",
-            f"/rest/v1/{table}",
-            payload=payload,
-            prefer="return=representation",
+    def _expire_stale_invites_for_child(self, child_user_id: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        table = dynamodb_service.table(self.invites_table)
+        resp = table.query(
+            KeyConditionExpression=Key("child_user_id").eq(child_user_id),
+            FilterExpression=Attr("status").eq("pending") & Attr("expires_at").lt(now),
         )
-        if not result:
-            raise HTTPException(status_code=502, detail="Supabase insert failed.")
-        return result[0]
-
-    def _update(self, table: str, *, filters: list[tuple[str, str]], payload: dict) -> list[dict]:
-        result = supabase_service.request(
-            "PATCH",
-            f"/rest/v1/{table}",
-            params=filters,
-            payload=payload,
-            prefer="return=representation",
-        )
-        return result or []
-
-    def _expire_stale_invites(self) -> None:
-        self._update(
-            self.invites_table,
-            filters=[
-                ("status", "eq.pending"),
-                ("expires_at", f"lt.{self._utc_now_iso()}"),
-            ],
-            payload={"status": "expired"},
-        )
+        for item in resp.get("Items", []):
+            table.update_item(
+                Key={"child_user_id": child_user_id, "created_at": item["created_at"]},
+                UpdateExpression="SET #s = :s",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "expired"},
+            )
 
     def get_active_link_for_user(self, user_id: str) -> dict | None:
-        links = self._select(
-            self.links_table,
-            filters=[
-                ("status", "eq.active"),
-                ("or", f"(parent_user_id.eq.{user_id},child_user_id.eq.{user_id})"),
-            ],
-            order="connected_at.desc",
-            limit=1,
+        table = dynamodb_service.table(self.links_table)
+
+        resp = table.query(
+            IndexName="parent-index",
+            KeyConditionExpression=Key("parent_user_id").eq(user_id) & Key("status").eq("active"),
+            Limit=1,
         )
-        return links[0] if links else None
+        items = resp.get("Items", [])
+        if items:
+            return _convert_decimals(items[0])
+
+        resp = table.query(
+            IndexName="child-index",
+            KeyConditionExpression=Key("child_user_id").eq(user_id) & Key("status").eq("active"),
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        return _convert_decimals(items[0]) if items else None
 
     def _get_pending_invite_for_child(self, child_user_id: str) -> dict | None:
-        invites = self._select(
-            self.invites_table,
-            filters=[
-                ("child_user_id", f"eq.{child_user_id}"),
-                ("status", "eq.pending"),
-            ],
-            order="created_at.desc",
-            limit=1,
+        self._expire_stale_invites_for_child(child_user_id)
+        now = datetime.now(timezone.utc).isoformat()
+        table = dynamodb_service.table(self.invites_table)
+        # Limit 없이 전체 조회 후 앱에서 첫 번째 선택 (DynamoDB Limit은 FilterExpression 전에 적용됨)
+        resp = table.query(
+            KeyConditionExpression=Key("child_user_id").eq(child_user_id),
+            FilterExpression=Attr("status").eq("pending") & Attr("expires_at").gt(now),
+            ScanIndexForward=False,
+            ConsistentRead=True,
         )
-        return invites[0] if invites else None
+        items = resp.get("Items", [])
+        return _convert_decimals(items[0]) if items else None
 
     def _find_pending_invite_by_code(self, invite_code: str) -> dict | None:
-        invites = self._select(
-            self.invites_table,
-            filters=[
-                ("invite_code", f"eq.{invite_code}"),
-                ("status", "eq.pending"),
-            ],
-            order="created_at.desc",
-            limit=1,
+        now = datetime.now(timezone.utc).isoformat()
+        table = dynamodb_service.table(self.invites_table)
+        resp = table.query(
+            IndexName="invite-code-index",
+            KeyConditionExpression=Key("invite_code").eq(invite_code) & Key("status").eq("pending"),
         )
-        return invites[0] if invites else None
+        for item in sorted(resp.get("Items", []), key=lambda x: x.get("created_at", ""), reverse=True):
+            if item.get("expires_at", "") < now:
+                table.update_item(
+                    Key={"child_user_id": item["child_user_id"], "created_at": item["created_at"]},
+                    UpdateExpression="SET #s = :s",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":s": "expired"},
+                )
+            else:
+                return _convert_decimals(item)
+        return None
 
     def _find_latest_invite_by_code(self, invite_code: str) -> dict | None:
-        invites = self._select(
-            self.invites_table,
-            filters=[("invite_code", f"eq.{invite_code}")],
-            order="created_at.desc",
-            limit=1,
+        now = datetime.now(timezone.utc).isoformat()
+        table = dynamodb_service.table(self.invites_table)
+        resp = table.query(
+            IndexName="invite-code-index",
+            KeyConditionExpression=Key("invite_code").eq(invite_code),
         )
-        return invites[0] if invites else None
+        items = resp.get("Items", [])
+        if not items:
+            return None
+        item = max(items, key=lambda x: x.get("created_at", ""))
+        item = dict(item)
+        if item.get("status") == "pending" and item.get("expires_at", "") < now:
+            item["status"] = "expired"
+        return _convert_decimals(item)
 
     def _generate_invite_code(self) -> str:
+        table = dynamodb_service.table(self.invites_table)
         for _ in range(MAX_CODE_GENERATION_ATTEMPTS):
             invite_code = f"{random.randint(0, 9999):0{INVITE_CODE_LENGTH}d}"
-            exists = self._select(
-                self.invites_table,
-                filters=[
-                    ("invite_code", f"eq.{invite_code}"),
-                    ("status", "eq.pending"),
-                ],
-                limit=1,
+            resp = table.query(
+                IndexName="invite-code-index",
+                KeyConditionExpression=Key("invite_code").eq(invite_code) & Key("status").eq("pending"),
+                Limit=1,
             )
-            if not exists:
+            if not resp.get("Items"):
                 return invite_code
         raise HTTPException(status_code=500, detail="초대 코드 생성에 실패했습니다.")
 
     def create_invite(self, child_user_id: str) -> dict:
-        self._expire_stale_invites()
+        self._expire_stale_invites_for_child(child_user_id)
 
         if self.get_active_link_for_user(child_user_id):
             raise HTTPException(
@@ -329,13 +311,11 @@ class SupabaseFamilyBackend:
             "status": "pending",
             "created_at": created_at.isoformat(),
             "expires_at": (created_at + timedelta(minutes=INVITE_TTL_MINUTES)).isoformat(),
-            "used_at": None,
         }
-        return self._insert(self.invites_table, invite_record)
+        dynamodb_service.table(self.invites_table).put_item(Item=invite_record)
+        return invite_record
 
     def connect_parent(self, parent_user_id: str, invite_code: str) -> dict:
-        self._expire_stale_invites()
-
         if self.get_active_link_for_user(parent_user_id):
             raise HTTPException(
                 status_code=409,
@@ -367,19 +347,21 @@ class SupabaseFamilyBackend:
             "created_at": connected_at.isoformat(),
             "connected_at": connected_at.isoformat(),
         }
-        created_link = self._insert(self.links_table, link_record)
-        self._update(
-            self.invites_table,
-            filters=[("invite_id", f"eq.{invite_record['invite_id']}")],
-            payload={
-                "status": "used",
-                "used_at": connected_at.isoformat(),
+        dynamodb_service.table(self.links_table).put_item(Item=link_record)
+        dynamodb_service.table(self.invites_table).update_item(
+            Key={"child_user_id": child_user_id, "created_at": invite_record["created_at"]},
+            UpdateExpression="SET #s = :s, #u = :u",
+            ExpressionAttributeNames={"#s": "status", "#u": "used_at"},
+            ExpressionAttributeValues={
+                ":s": "used",
+                ":u": connected_at.isoformat(),
             },
         )
-        return created_link
+        return link_record
 
     def get_my_family(self, user_id: str, role: str | None) -> dict:
-        self._expire_stale_invites()
+        if role == "child":
+            self._expire_stale_invites_for_child(user_id)
 
         active_link = self.get_active_link_for_user(user_id)
         pending_invite = None
@@ -397,7 +379,7 @@ class SupabaseFamilyBackend:
 class FamilyService:
     def __init__(self) -> None:
         self._memory_backend = InMemoryFamilyBackend()
-        self._supabase_backend = SupabaseFamilyBackend()
+        self._dynamodb_backend = DynamoDBFamilyBackend()
         self._backend_override = None
 
     def set_backend(self, backend) -> None:
@@ -409,43 +391,30 @@ class FamilyService:
     def _backend(self):
         if self._backend_override is not None:
             return self._backend_override
-        if self._supabase_backend.is_configured():
-            return self._supabase_backend
+        if self._dynamodb_backend.is_configured():
+            return self._dynamodb_backend
         if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
             return self._memory_backend
         raise HTTPException(
             status_code=500,
-            detail="Supabase is not configured for family persistence.",
+            detail="DynamoDB is not configured for family persistence.",
         )
 
-    @property
-    def _user_profiles_table(self) -> str:
-        return os.getenv("SUPABASE_USER_PROFILES_TABLE", "user_profiles")
-
-    def _get_user_name(self, user_id: str | None, *, use_supabase: bool) -> str | None:
-        if not user_id or not use_supabase or not supabase_service.is_configured():
+    def _get_user_name(self, user_id: str | None) -> str | None:
+        if not user_id or not dynamodb_service.is_configured():
             return None
-        rows = supabase_service.select(
-            self._user_profiles_table,
-            filters=[("user_id", f"eq.{user_id}")],
-            limit=1,
-        )
-        if not rows:
-            return None
-        return rows[0].get("name")
+        resp = dynamodb_service.table(
+            os.getenv("DYNAMODB_USER_PROFILES_TABLE", "user_profiles")
+        ).get_item(Key={"user_id": user_id})
+        item = resp.get("Item")
+        return item.get("name") if item else None
 
-    def _enrich_active_link(self, active_link: dict | None, *, use_supabase: bool) -> dict | None:
+    def _enrich_active_link(self, active_link: dict | None) -> dict | None:
         if not active_link:
             return None
         enriched = dict(active_link)
-        enriched["parent_name"] = self._get_user_name(
-            enriched.get("parent_user_id"),
-            use_supabase=use_supabase,
-        )
-        enriched["child_name"] = self._get_user_name(
-            enriched.get("child_user_id"),
-            use_supabase=use_supabase,
-        )
+        enriched["parent_name"] = self._get_user_name(enriched.get("parent_user_id"))
+        enriched["child_name"] = self._get_user_name(enriched.get("child_user_id"))
         return enriched
 
     def create_invite(self, child_user_id: str) -> dict:
@@ -455,12 +424,8 @@ class FamilyService:
         return self._backend().connect_parent(parent_user_id, invite_code)
 
     def get_my_family(self, user_id: str, role: str | None) -> dict:
-        backend = self._backend()
-        payload = backend.get_my_family(user_id, role)
-        payload["active_link"] = self._enrich_active_link(
-            payload.get("active_link"),
-            use_supabase=backend is self._supabase_backend,
-        )
+        payload = self._backend().get_my_family(user_id, role)
+        payload["active_link"] = self._enrich_active_link(payload.get("active_link"))
         return payload
 
     def get_active_link_for_user(self, user_id: str) -> dict | None:

@@ -17,8 +17,10 @@ import boto3
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
+from boto3.dynamodb.conditions import Attr, Key
+
 from app.services.notification_service import notification_service
-from app.services.supabase_service import supabase_service
+from app.services.dynamodb_service import dynamodb_service, _convert_decimals, _build_update_expr
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -66,14 +68,14 @@ class InMemoryDementiaBackend:
         return record
 
 
-class SupabaseDementiaBackend:
+class DynamoDBDementiaBackend:
     @property
-    def table(self) -> str:
-        return os.getenv("SUPABASE_DEMENTIA_ANALYSES_TABLE", "dementia_analyses")
+    def table_name(self) -> str:
+        return os.getenv("DYNAMODB_DEMENTIA_ANALYSES_TABLE", "dementia_assessments")
 
     @staticmethod
     def is_configured() -> bool:
-        return supabase_service.is_configured()
+        return dynamodb_service.is_configured()
 
     def create_analysis_record(self, user_id: str, answer_id: str) -> dict:
         record = {
@@ -81,40 +83,47 @@ class SupabaseDementiaBackend:
             "answer_id": answer_id,
             "user_id": user_id,
             "status": "pending",
-            "transcript": None,
-            "risk_level": None,
-            "risk_score": None,
-            "analysis_summary": None,
-            "indicators": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "completed_at": None,
         }
-        return supabase_service.insert(self.table, record)[0]
+        dynamodb_service.table(self.table_name).put_item(Item=record)
+        return record
 
     def get_analysis(self, analysis_id: str) -> dict | None:
-        rows = supabase_service.select(
-            self.table,
-            filters=[("analysis_id", f"eq.{analysis_id}")],
-            limit=1,
+        resp = dynamodb_service.table(self.table_name).scan(
+            FilterExpression=Attr("analysis_id").eq(analysis_id),
         )
-        return rows[0] if rows else None
+        items = resp.get("Items", [])
+        return _convert_decimals(items[0]) if items else None
 
     def get_user_analyses(self, user_id: str) -> list[dict]:
-        return supabase_service.select(
-            self.table,
-            filters=[("user_id", f"eq.{user_id}")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.table_name).query(
+            KeyConditionExpression=Key("user_id").eq(user_id),
         )
+        items = [_convert_decimals(item) for item in resp.get("Items", [])]
+        return sorted(items, key=lambda x: x.get("created_at", ""), reverse=True)
+
+    def _find_item_key(self, analysis_id: str) -> dict:
+        resp = dynamodb_service.table(self.table_name).scan(
+            FilterExpression=Attr("analysis_id").eq(analysis_id),
+        )
+        items = resp.get("Items", [])
+        if not items:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        return {"user_id": items[0]["user_id"], "analysis_id": analysis_id}
 
     def update_analysis_record(self, analysis_id: str, **changes) -> dict:
-        rows = supabase_service.update(
-            self.table,
-            filters=[("analysis_id", f"eq.{analysis_id}")],
-            payload=changes,
+        table = dynamodb_service.table(self.table_name)
+        key = self._find_item_key(analysis_id)
+        clean = {k: v for k, v in changes.items() if v is not None}
+        expr, names, values = _build_update_expr(clean)
+        resp = table.update_item(
+            Key=key,
+            UpdateExpression=expr,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
         )
-        if not rows:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        return rows[0]
+        return _convert_decimals(resp["Attributes"])
 
 
 class DementiaService:
@@ -122,7 +131,7 @@ class DementiaService:
         self._s3_client = None
         self._openai_client = None
         self._memory_backend = InMemoryDementiaBackend()
-        self._supabase_backend = SupabaseDementiaBackend()
+        self._dynamodb_backend = DynamoDBDementiaBackend()
         self._backend_override = None
 
     def set_backend(self, backend) -> None:
@@ -134,13 +143,13 @@ class DementiaService:
     def _backend(self):
         if self._backend_override is not None:
             return self._backend_override
-        if self._supabase_backend.is_configured():
-            return self._supabase_backend
+        if self._dynamodb_backend.is_configured():
+            return self._dynamodb_backend
         if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
             return self._memory_backend
         raise HTTPException(
             status_code=500,
-            detail="Supabase is not configured for dementia analysis persistence.",
+            detail="DynamoDB is not configured for dementia analysis persistence.",
         )
 
     def _get_s3_client(self):

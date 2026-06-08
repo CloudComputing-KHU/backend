@@ -7,7 +7,9 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from app.services.supabase_service import supabase_service
+from boto3.dynamodb.conditions import Attr, Key
+
+from app.services.dynamodb_service import dynamodb_service, _convert_decimals
 
 logger = logging.getLogger(__name__)
 
@@ -60,87 +62,91 @@ class InMemoryNotificationBackend:
             n["is_read"] = True
 
 
-class SupabaseNotificationBackend:
+class DynamoDBNotificationBackend:
     @property
     def device_tokens_table(self) -> str:
-        return os.getenv("SUPABASE_DEVICE_TOKENS_TABLE", "device_tokens")
+        return os.getenv("DYNAMODB_DEVICE_TOKENS_TABLE", "device_tokens")
 
     @property
     def notifications_table(self) -> str:
-        return os.getenv("SUPABASE_NOTIFICATIONS_TABLE", "notifications")
+        return os.getenv("DYNAMODB_NOTIFICATIONS_TABLE", "notifications")
 
     @staticmethod
     def is_configured() -> bool:
-        return supabase_service.is_configured()
+        return dynamodb_service.is_configured()
 
     def register_token(self, user_id: str, fcm_token: str) -> None:
-        supabase_service.upsert(
-            self.device_tokens_table,
-            {
-                "user_id": user_id,
-                "fcm_token": fcm_token,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="user_id",
-        )
+        dynamodb_service.table(self.device_tokens_table).put_item(Item={
+            "user_id": user_id,
+            "fcm_token": fcm_token,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     def get_token(self, user_id: str) -> Optional[str]:
-        rows = supabase_service.select(
-            self.device_tokens_table,
-            filters=[("user_id", f"eq.{user_id}")],
-            limit=1,
-        )
-        if not rows:
-            return None
-        return rows[0].get("fcm_token")
+        resp = dynamodb_service.table(self.device_tokens_table).get_item(Key={"user_id": user_id})
+        item = resp.get("Item")
+        return item.get("fcm_token") if item else None
 
     def save_notification(self, user_id: str, title: str, body: str, data: Optional[dict]) -> dict:
-        record = {
+        record: dict = {
             "notification_id": uuid.uuid4().hex,
             "user_id": user_id,
             "title": title,
             "body": body,
-            "data": data,
             "is_read": False,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return supabase_service.insert(self.notifications_table, record)[0]
+        if data:
+            record["data"] = data
+        dynamodb_service.table(self.notifications_table).put_item(Item=record)
+        return record
 
     def get_notifications(self, user_id: str) -> list[dict]:
-        return supabase_service.select(
-            self.notifications_table,
-            filters=[("user_id", f"eq.{user_id}")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.notifications_table).query(
+            KeyConditionExpression=Key("user_id").eq(user_id),
         )
+        items = [_convert_decimals(item) for item in resp.get("Items", [])]
+        return sorted(items, key=lambda x: x.get("created_at", ""), reverse=True)
 
     def get_unread_notifications(self, user_id: str) -> list[dict]:
-        return supabase_service.select(
-            self.notifications_table,
-            filters=[("user_id", f"eq.{user_id}"), ("is_read", "eq.false")],
-            order="created_at.desc",
+        resp = dynamodb_service.table(self.notifications_table).query(
+            KeyConditionExpression=Key("user_id").eq(user_id),
+            FilterExpression=Attr("is_read").eq(False),
         )
+        items = [_convert_decimals(item) for item in resp.get("Items", [])]
+        return sorted(items, key=lambda x: x.get("created_at", ""), reverse=True)
 
     def mark_read(self, notification_id: str, user_id: str) -> bool:
-        rows = supabase_service.update(
-            self.notifications_table,
-            filters=[("notification_id", f"eq.{notification_id}"), ("user_id", f"eq.{user_id}")],
-            payload={"is_read": True},
+        table = dynamodb_service.table(self.notifications_table)
+        resp = table.get_item(Key={"user_id": user_id, "notification_id": notification_id})
+        if not resp.get("Item"):
+            return False
+        table.update_item(
+            Key={"user_id": user_id, "notification_id": notification_id},
+            UpdateExpression="SET #ir = :ir",
+            ExpressionAttributeNames={"#ir": "is_read"},
+            ExpressionAttributeValues={":ir": True},
         )
-        return len(rows) > 0
+        return True
 
     def mark_all_read(self, user_id: str) -> None:
-        supabase_service.update(
-            self.notifications_table,
-            filters=[("user_id", f"eq.{user_id}"), ("is_read", "eq.false")],
-            payload={"is_read": True},
+        table = dynamodb_service.table(self.notifications_table)
+        resp = table.query(
+            KeyConditionExpression=Key("user_id").eq(user_id),
+            FilterExpression=Attr("is_read").eq(False),
         )
+        with table.batch_writer() as batch:
+            for item in resp.get("Items", []):
+                item = dict(item)
+                item["is_read"] = True
+                batch.put_item(Item=item)
 
 
 class NotificationService:
     def __init__(self) -> None:
         self._app = None
         self._memory_backend = InMemoryNotificationBackend()
-        self._supabase_backend = SupabaseNotificationBackend()
+        self._dynamodb_backend = DynamoDBNotificationBackend()
         self._backend_override = None
 
     def set_backend(self, backend) -> None:
@@ -152,13 +158,13 @@ class NotificationService:
     def _backend(self):
         if self._backend_override is not None:
             return self._backend_override
-        if self._supabase_backend.is_configured():
-            return self._supabase_backend
+        if self._dynamodb_backend.is_configured():
+            return self._dynamodb_backend
         if os.getenv("ALLOW_IN_MEMORY_FALLBACK", "").lower() == "true":
             return self._memory_backend
         raise HTTPException(
             status_code=500,
-            detail="Supabase is not configured for notification persistence.",
+            detail="DynamoDB is not configured for notification persistence.",
         )
 
     def _get_app(self):
